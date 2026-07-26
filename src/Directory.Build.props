@@ -1,0 +1,13 @@
+<Project>
+    <Import Project="..\Directory.Build.props"/>
+
+    <PropertyGroup>
+        <PackageProjectUrl>https://github.com/UniStuttgart-ICD/cassis</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/UniStuttgart-ICD/cassis</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <Authors>ICD University of Stuttgart</Authors>
+        <Copyright>© ICD University of Stuttgart</Copyright>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <SignAssembly>false</SignAssembly>
+    </PropertyGroup>
+</Project>
