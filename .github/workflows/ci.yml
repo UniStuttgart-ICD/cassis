@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore Cassis.sln
+
+      - name: Build
+        run: dotnet build Cassis.sln --configuration Release --no-restore --no-incremental
+
+      - name: Test transport
+        run: dotnet test tests/ModelContextProtocol.HttpListener.Tests/ModelContextProtocol.HttpListener.Tests.csproj --configuration Release --no-build
+
+      - name: Audit dependencies
+        shell: pwsh
+        run: |
+          $lines = & dotnet list Cassis.sln package --vulnerable --include-transitive 2>&1
+          $exitCode = $LASTEXITCODE
+          $report = $lines -join "`n"
+          Write-Host $report
+          if ($exitCode -ne 0) {
+            throw "Dependency audit failed."
+          }
+          if ($report -match "has the following vulnerable packages") {
+            throw "Vulnerable dependencies were found."
+          }
+
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          [xml] $project = Get-Content src/Cassis/Cassis.csproj -Raw
+          $expectedTag = "v$(([string] $project.Project.PropertyGroup.Version).Trim())"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Tag $env:GITHUB_REF_NAME does not match project version $expectedTag."
+          }
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/New-ReleasePackage.ps1 -NoBuild
+
+      - name: Verify public release
+        shell: pwsh
+        run: ./scripts/Test-PublicRelease.ps1 -Archive artifacts/release/Cassis.zip -CheckHistory
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Cassis-release
+          path: artifacts/release/Cassis.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: Cassis-release
+          path: release
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          "release/Cassis.zip#Cassis.zip"
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --title "Cassis $GITHUB_REF_NAME"
+          --generate-notes

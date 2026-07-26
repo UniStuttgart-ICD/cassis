@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Settings>
+    <!-- Windows path -->
+    <RhinoSystemDirectory Condition="'$(OS)' == 'Windows_NT'">C:\\Program Files\\Rhino 8\\System</RhinoSystemDirectory>
+    <!-- macOS path -->
+    <RhinoSystemDirectory Condition="'$(OS)' != 'Windows_NT'">/Applications/Rhino 8.app/Contents/MacOS</RhinoSystemDirectory>
+    <LoadGrasshopper>false</LoadGrasshopper>
+    <CreateRhinoDoc>true</CreateRhinoDoc>
+    <CreateRhinoView>false</CreateRhinoView>
+    <LoadEto>false</LoadEto>
+    <LoadRDK>false</LoadRDK>
+</Settings>
