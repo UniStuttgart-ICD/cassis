@@ -8,7 +8,7 @@ featuring an improved class-based architecture, better error handling, and
 enhanced user experience.
 
 Command-line interface for AI assistant usage
-Usage: python Cassis_tester.py --help
+Usage: python cassis_tester.py --help
 """
 
 import os
@@ -44,7 +44,7 @@ logging.basicConfig(
     datefmt="[%X]",
     handlers=[RichHandler(rich_tracebacks=True)]
 )
-logger = logging.getLogger("Cassis_tester")
+logger = logging.getLogger("cassis_tester")
 
 # Initialize rich console with better styling
 console = Console(
@@ -3801,27 +3801,27 @@ def create_cli_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   # Basic operations
-  python Cassis_tester.py --check-connection
-  python Cassis_tester.py --list-components
-  python Cassis_tester.py --system-health
+  python cassis_tester.py --check-connection
+  python cassis_tester.py --list-components
+  python cassis_tester.py --system-health
   
   # Component creation
-  python Cassis_tester.py --add-component slider 200 300
-  python Cassis_tester.py --add-python-script 100 200 "print('Hello')"
-  python Cassis_tester.py --add-csharp-script 100 200 "System.Console.WriteLine(\"Hello\");"
+  python cassis_tester.py --add-component slider 200 300
+  python cassis_tester.py --add-python-script 100 200 "print('Hello')"
+  python cassis_tester.py --add-csharp-script 100 200 "System.Console.WriteLine(\"Hello\");"
   
   # Advanced features
-  python Cassis_tester.py --capture-state
-  python Cassis_tester.py --clear-canvas
+  python cassis_tester.py --capture-state
+  python cassis_tester.py --clear-canvas
   
   # Groups
-  python Cassis_tester.py --create-group "MyGroup" 100 200 "#FF0000"
+  python cassis_tester.py --create-group "MyGroup" 100 200 "#FF0000"
   
   # JSON output for AI usage
-  python Cassis_tester.py --list-components --json --quiet
+  python cassis_tester.py --list-components --json --quiet
   
   # Interactive mode with improved UI
-  python Cassis_tester.py --interactive
+  python cassis_tester.py --interactive
         """
     )
     

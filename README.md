@@ -121,7 +121,7 @@ src/
 └── ModelContextProtocol.HttpListener/    # HTTP/SSE transport
 tests/
 ├── Cassis.Tests/                 # NUnit tests
-└── Cassis_tester.py             # Python integration tests
+└── cassis_tester.py             # Python integration tests
 ```
 
 ### Commands

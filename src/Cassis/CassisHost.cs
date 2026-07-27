@@ -27,7 +27,7 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
     /// </summary>
     public CassisHost(string prefix, IEnumerable<string>? enabledTools = null)
     {
-        var logPath = Path.Combine(Path.GetTempPath(), "Cassis_debug.log");
+        var logPath = Path.Combine(Path.GetTempPath(), "cassis_debug.log");
         
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating services...");
         var services = new ServiceCollection();

@@ -16,7 +16,7 @@ import statistics
 # Add the current directory to the path so we can import the tester
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from Cassis_tester import make_mcp_request, check_mcp_connection
+from cassis_tester import make_mcp_request, check_mcp_connection
 from Common.mcp_utils import MCPClient
 
 

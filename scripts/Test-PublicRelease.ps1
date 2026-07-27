@@ -64,6 +64,7 @@ function Assert-FileAllowed {
     }
 }
 
+
 Push-Location $repoRoot
 try {
     $trackedFiles = @(& git ls-files)
@@ -185,7 +186,9 @@ if ($Archive) {
         }
 
         Get-ChildItem -LiteralPath $tempRoot -Recurse -File |
-            ForEach-Object { Assert-FileAllowed -Path $_.FullName }
+            ForEach-Object {
+                Assert-FileAllowed -Path $_.FullName
+            }
 
         $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
             (Join-Path $packageRoot "Cassis.gha")).ProductVersion
