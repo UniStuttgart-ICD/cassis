@@ -40,6 +40,17 @@
         <Description>MCP server plugin for Grasshopper (Rhino 8) that lets AI assistants read and edit Grasshopper definitions</Description>
     </PropertyGroup>
 
+    <PropertyGroup>
+        <YakExecutable Condition="'$(YakExecutable)' == '' and $([MSBuild]::IsOSPlatform('windows')) and Exists('$(ProgramFiles)\Rhino 8\System\yak.exe')">$(ProgramFiles)\Rhino 8\System\yak.exe</YakExecutable>
+        <YakExecutable Condition="'$(YakExecutable)' == '' and $([MSBuild]::IsOSPlatform('macos')) and Exists('/Applications/Rhino 8.app/Contents/Resources/bin/yak')">/Applications/Rhino 8.app/Contents/Resources/bin/yak</YakExecutable>
+        <BuildYakPackage Condition="'$(BuildYakPackage)' == '' and '$(Configuration)' == 'Release' and '$(YakExecutable)' != '' and Exists('$(YakExecutable)')">True</BuildYakPackage>
+        <YakPlatform Condition="'$(YakPlatform)' == '' and $([MSBuild]::IsOSPlatform('windows'))">win</YakPlatform>
+        <YakPlatform Condition="'$(YakPlatform)' == '' and $([MSBuild]::IsOSPlatform('macos'))">mac</YakPlatform>
+        <YakPlatform Condition="'$(YakPlatform)' == ''">any</YakPlatform>
+        <YakPackageOutputPath Condition="'$(YakPackageOutputPath)' == ''">$([MSBuild]::NormalizeDirectory('$(ArtifactsDir)', 'yak', '$(Configuration)'))</YakPackageOutputPath>
+        <YakPackageStagePath>$([MSBuild]::NormalizeDirectory('$(YakPackageOutputPath)', 'stage'))</YakPackageStagePath>
+    </PropertyGroup>
+
     <ItemGroup>
         <PackageReference Include="Grasshopper" Condition="$(TargetFramework) == 'net48'" ExcludeAssets="runtime" />
         <PackageReference Include="Grasshopper" Condition="!$(TargetFramework.StartsWith('net4'))" ExcludeAssets="runtime" />
@@ -145,6 +156,49 @@
     <Copy Condition="Exists('$(OutputPath)$(AssemblyName)$(TargetExt)')" SourceFiles="$(OutputPath)$(AssemblyName)$(TargetExt)" DestinationFolder="$(GrasshopperLibrariesFolder)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(DeployDll)" DestinationFolder="$(GrasshopperPluginFolder)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(DeployDll)" DestinationFolder="$(GrasshopperLibrariesFolder)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="BuildYakPackage"
+          AfterTargets="DispatchToInnerBuilds"
+          Condition="'$(BuildYakPackage)' == 'True'">
+    <Error Text="Yak executable not found. Set YakExecutable to a valid Yak CLI path."
+           Condition="'$(YakExecutable)' == '' Or !Exists('$(YakExecutable)')" />
+    <Error Text="Missing net48 plugin output."
+           Condition="!Exists('$(OutputPath)net48\$(AssemblyName)$(TargetExt)')" />
+    <Error Text="Missing net8.0 plugin output."
+           Condition="!Exists('$(OutputPath)net8.0\$(AssemblyName)$(TargetExt)')" />
+    <Error Text="Missing net8.0-windows plugin output."
+           Condition="!Exists('$(OutputPath)net8.0-windows\$(AssemblyName)$(TargetExt)')" />
+
+    <ItemGroup>
+      <YakNet48Files Include="$(OutputPath)net48\$(AssemblyName)$(TargetExt);$(OutputPath)net48\*.dll" />
+      <YakNet80Files Include="$(OutputPath)net8.0\$(AssemblyName)$(TargetExt);$(OutputPath)net8.0\*.dll" />
+      <YakNet80WindowsFiles Include="$(OutputPath)net8.0-windows\$(AssemblyName)$(TargetExt);$(OutputPath)net8.0-windows\*.dll" />
+      <YakPackagesToDelete Include="$(YakPackageOutputPath)*.yak" />
+    </ItemGroup>
+
+    <RemoveDir Directories="$(YakPackageStagePath)" />
+    <MakeDir Directories="$(YakPackageOutputPath);$(YakPackageStagePath);$(YakPackageStagePath)logo;$(YakPackageStagePath)net48;$(YakPackageStagePath)net8.0;$(YakPackageStagePath)net8.0-windows" />
+    <Delete Files="@(YakPackagesToDelete)" />
+
+    <Copy SourceFiles="$(RepoRoot)manifest.yml;$(RepoRoot)LICENSE;$(RepoRoot)THIRD-PARTY-NOTICES.md"
+          DestinationFolder="$(YakPackageStagePath)" />
+    <Copy SourceFiles="$(RepoRoot)logo\cassis_logo.png"
+          DestinationFolder="$(YakPackageStagePath)logo" />
+    <Copy SourceFiles="@(YakNet48Files)" DestinationFolder="$(YakPackageStagePath)net48" />
+    <Copy SourceFiles="@(YakNet80Files)" DestinationFolder="$(YakPackageStagePath)net8.0" />
+    <Copy SourceFiles="@(YakNet80WindowsFiles)" DestinationFolder="$(YakPackageStagePath)net8.0-windows" />
+
+    <Exec Command="&quot;$(YakExecutable)&quot; build --platform $(YakPlatform) --version $(Version)"
+          WorkingDirectory="$(YakPackageStagePath)" />
+
+    <ItemGroup>
+      <BuiltYakPackage Include="$(YakPackageStagePath)*.yak" />
+    </ItemGroup>
+    <Error Text="Yak did not produce a package." Condition="'@(BuiltYakPackage)' == ''" />
+    <Copy SourceFiles="@(BuiltYakPackage)" DestinationFolder="$(YakPackageOutputPath)" />
+    <RemoveDir Directories="$(YakPackageStagePath)" />
+    <Message Text="Yak package: @(BuiltYakPackage->'$(YakPackageOutputPath)%(Filename)%(Extension)')" Importance="high" />
   </Target>
 
 </Project>
