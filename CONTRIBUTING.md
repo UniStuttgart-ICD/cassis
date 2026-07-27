@@ -47,6 +47,10 @@ The Grasshopper test project requires a local Rhino 8 installation:
 dotnet test tests/Cassis.Tests/Cassis.Tests.csproj -f net48
 ```
 
+Release builds create a Yak package under `artifacts/yak/Release/` when the
+Rhino 8 Yak CLI is available. Override its path with
+`-p:YakExecutable=<path> -p:BuildYakPackage=True`.
+
 ## Pull Request Process
 
 1. Fork the repo and create a feature branch

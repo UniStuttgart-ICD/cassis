@@ -133,6 +133,11 @@ dotnet test tests/ModelContextProtocol.HttpListener.Tests/ModelContextProtocol.H
 pwsh ./scripts/New-ReleasePackage.ps1 -NoBuild
 ```
 
+When Rhino 8's Yak CLI is installed, a build also creates
+`artifacts/yak/Release/cassis-<version>-rh8_0-win.yak`. Set
+`YakExecutable` and `BuildYakPackage=True` as MSBuild properties on build
+machines where Yak is installed elsewhere.
+
 ### Adding a Tool
 
 1. Create a class in `Tools/` with `[McpServerToolType]`

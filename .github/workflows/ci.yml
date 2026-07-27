@@ -23,11 +23,31 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Install Yak
+        shell: pwsh
+        run: |
+          $yak = Join-Path $env:RUNNER_TEMP "yak.exe"
+          Invoke-WebRequest `
+            -Uri "https://files.mcneel.com/yak/tools/0.15.0/yak.exe" `
+            -OutFile $yak
+          $expected = "604c699dfa8694f4a83eb33f1d30f70ff72d2619836a4b9347eaa5d646a6103a"
+          $actual = (Get-FileHash -LiteralPath $yak -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Yak checksum mismatch: $actual"
+          }
+          "YAK_EXECUTABLE=$yak" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Restore
         run: dotnet restore Cassis.sln
 
       - name: Build
-        run: dotnet build Cassis.sln --configuration Release --no-restore --no-incremental
+        run: >-
+          dotnet build Cassis.sln
+          --configuration Release
+          --no-restore
+          --no-incremental
+          -p:BuildYakPackage=True
+          -p:YakExecutable="$env:YAK_EXECUTABLE"
 
       - name: Test transport
         run: dotnet test tests/ModelContextProtocol.HttpListener.Tests/ModelContextProtocol.HttpListener.Tests.csproj --configuration Release --no-build
@@ -62,12 +82,26 @@ jobs:
 
       - name: Verify public release
         shell: pwsh
-        run: ./scripts/Test-PublicRelease.ps1 -Archive artifacts/release/Cassis.zip -CheckHistory
+        run: |
+          $yak = @(Get-ChildItem artifacts/yak/Release/*.yak)
+          if ($yak.Count -ne 1) {
+            throw "Expected one Yak package, found $($yak.Count)."
+          }
+          ./scripts/Test-PublicRelease.ps1 `
+            -Archive artifacts/release/Cassis.zip `
+            -YakArchive $yak[0].FullName `
+            -CheckHistory
+
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/publish -Force | Out-Null
+          Copy-Item artifacts/release/Cassis.zip,artifacts/yak/Release/*.yak artifacts/publish/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Cassis-release
-          path: artifacts/release/Cassis.zip
+          path: artifacts/publish/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -88,6 +122,7 @@ jobs:
         run: >
           gh release create "$GITHUB_REF_NAME"
           "release/Cassis.zip#Cassis.zip"
+          release/*.yak
           --repo "$GITHUB_REPOSITORY"
           --verify-tag
           --title "Cassis $GITHUB_REF_NAME"
