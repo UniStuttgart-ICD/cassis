@@ -52,7 +52,8 @@ internal static class ToolDescriptionCatalog
 
                 return new ToolDescriptionCandidate(
                     exposedName,
-                    method.GetCustomAttribute<DescriptionAttribute>()?.Description);
+                    method.GetCustomAttribute<DescriptionAttribute>()?.Description,
+                    !string.IsNullOrWhiteSpace(attributeName));
             })
             .Where(candidate =>
                 candidate != null &&
@@ -64,14 +65,24 @@ internal static class ToolDescriptionCatalog
         foreach (var group in candidates)
         {
             var entries = group.ToArray();
-            if (entries.Length != 1 || string.IsNullOrWhiteSpace(entries[0].Description))
+            var explicitlyNamed = entries.Where(candidate => candidate.HasExplicitName).ToArray();
+            var selected = explicitlyNamed.Length == 1
+                ? explicitlyNamed[0]
+                : entries.Length == 1
+                    ? entries[0]
+                    : null;
+
+            if (selected == null || string.IsNullOrWhiteSpace(selected.Description))
                 continue;
 
-            descriptions.Add(group.Key, entries[0].Description!);
+            descriptions.Add(group.Key, selected.Description!);
         }
 
         return descriptions;
     }
 
-    private sealed record ToolDescriptionCandidate(string Name, string? Description);
+    private sealed record ToolDescriptionCandidate(
+        string Name,
+        string? Description,
+        bool HasExplicitName);
 }

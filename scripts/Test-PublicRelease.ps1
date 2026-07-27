@@ -13,6 +13,16 @@ $restrictedTerms = @(
     -join ([char[]](65, 66, 120, 77)),
     -join ([char[]](82, 65, 68, 114))
 )
+$legacyProductPart = -join ([char[]](71, 114, 97, 115, 115, 104, 111, 112, 112, 101, 114))
+$protocolPart = -join ([char[]](77, 67, 80))
+$restrictedPatterns = @(
+    [regex]::new(
+        "$([regex]::Escape($legacyProductPart))[^A-Za-z0-9]*$([regex]::Escape($protocolPart))",
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+    [regex]::new(
+        "$([regex]::Escape($protocolPart))[^A-Za-z0-9]*$([regex]::Escape($legacyProductPart))",
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+)
 $privateKeyExtensions = @(".snk", ".pfx", ".p12", ".pem", ".key")
 $privateKeyMarkers = @(
     "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t",
@@ -28,6 +38,18 @@ $scanEncodings = @(
     [System.Text.Encoding]::Unicode,
     [System.Text.Encoding]::BigEndianUnicode
 )
+$privateBuildPaths = @(
+    $repoRoot,
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+) |
+    Where-Object { ![string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object {
+        $path = $_.TrimEnd('\', '/')
+        $path
+        $path.Replace('\', '/')
+        $path.Replace('/', '\')
+    } |
+    Select-Object -Unique
 
 # Build restricted signatures at runtime so the verifier does not flag itself.
 function Assert-PathAllowed {
@@ -35,6 +57,12 @@ function Assert-PathAllowed {
 
     foreach ($term in $restrictedTerms) {
         if ($Path.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "Restricted path found: $Path"
+        }
+    }
+
+    foreach ($pattern in $restrictedPatterns) {
+        if ($pattern.IsMatch($Path)) {
             throw "Restricted path found: $Path"
         }
     }
@@ -54,6 +82,18 @@ function Assert-FileAllowed {
         foreach ($term in $restrictedTerms) {
             if ($text.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 throw "Restricted content found in $Path"
+            }
+        }
+
+        foreach ($pattern in $restrictedPatterns) {
+            if ($pattern.IsMatch($text)) {
+                throw "Restricted content found in $Path"
+            }
+        }
+
+        foreach ($privateBuildPath in $privateBuildPaths) {
+            if ($text.IndexOf($privateBuildPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "Private build path found in $Path"
             }
         }
 

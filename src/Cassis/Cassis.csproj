@@ -145,11 +145,13 @@
   </Target>
 
   <!-- Plugin GUID folder (Grasshopper loads .gha here) -->
-  <PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('macos'))">
     <GrasshopperPluginFolder>$(HOME)/Library/Application Support/McNeel/Rhinoceros/8.0/Plug-ins/Grasshopper (b45a29b1-4343-4035-989e-044e8580d9cf)</GrasshopperPluginFolder>
     <GrasshopperLibrariesFolder>$(GrasshopperPluginFolder)/Libraries</GrasshopperLibrariesFolder>
   </PropertyGroup>
-  <Target Name="DeployToGrasshopperPlugin" AfterTargets="CollectDeployDlls" Condition="'$(TargetFramework)'=='net8.0' Or '$(TargetFramework)'=='net8.0-windows'">
+  <Target Name="DeployToGrasshopperPlugin"
+          AfterTargets="CollectDeployDlls"
+          Condition="$([MSBuild]::IsOSPlatform('macos')) And ('$(TargetFramework)' == 'net8.0' Or '$(TargetFramework)' == 'net8.0-macos')">
     <MakeDir Directories="$(GrasshopperPluginFolder)" Condition="!Exists('$(GrasshopperPluginFolder)')" />
     <Copy Condition="Exists('$(OutputPath)$(AssemblyName)$(TargetExt)')" SourceFiles="$(OutputPath)$(AssemblyName)$(TargetExt)" DestinationFolder="$(GrasshopperPluginFolder)" SkipUnchangedFiles="true" />
     <MakeDir Directories="$(GrasshopperLibrariesFolder)" Condition="!Exists('$(GrasshopperLibrariesFolder)')" />

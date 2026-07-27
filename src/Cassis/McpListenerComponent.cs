@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ModelContextProtocol.Protocol;
 using System.Text.Json;
+using Cassis.Diagnostics;
 using Cassis.Properties;
 using Rhino;
 using System.Net.NetworkInformation;
@@ -197,11 +198,20 @@ namespace Cassis
                             }
                             catch (Exception ex)
                             {
+                                var report = McpStartupDiagnostics.WriteReport(ex, "StartAsync", actualPrefix);
                                 Rhino.RhinoApp.WriteLine($"[MCP ERROR] Failed to start server: {ex.Message}");
                                 Rhino.RhinoApp.WriteLine($"[MCP ERROR] {ex.StackTrace}");
+                                Rhino.RhinoApp.WriteLine(
+                                    report.Written
+                                        ? $"[MCP ERROR] Startup report: {report.Detail}"
+                                        : $"[MCP ERROR] Startup report unavailable: {report.Detail}");
                                 lock (_statusLock)
                                 {
-                                    _currentStatus = $"Error: {ex.Message}";
+                                    _currentStatus = report.Written ? "Error (report written)" : "Error";
+                                    _messages.Add(
+                                        report.Written
+                                            ? $"MCP startup report: {report.Detail}"
+                                            : $"MCP startup report unavailable: {report.Detail}");
                                 }
                                 Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
                             }
@@ -215,7 +225,20 @@ namespace Cassis
                     }
                     catch (Exception ex)
                     {
-                        lock (_statusLock) _currentStatus = $"Error: {ex.Message}";
+                        var report = McpStartupDiagnostics.WriteReport(ex, "Create CassisHost", prefix);
+                        Rhino.RhinoApp.WriteLine($"[MCP ERROR] Failed to create server: {ex.Message}");
+                        Rhino.RhinoApp.WriteLine(
+                            report.Written
+                                ? $"[MCP ERROR] Startup report: {report.Detail}"
+                                : $"[MCP ERROR] Startup report unavailable: {report.Detail}");
+                        lock (_statusLock)
+                        {
+                            _currentStatus = report.Written ? "Error (report written)" : "Error";
+                            _messages.Add(
+                                report.Written
+                                    ? $"MCP startup report: {report.Detail}"
+                                    : $"MCP startup report unavailable: {report.Detail}");
+                        }
                         SafeDisposeServer();
                     }
                 }
@@ -264,10 +287,14 @@ namespace Cassis
             }
             catch (Exception ex)
             {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"MCP Component Error: {ex.Message}");
+                var report = McpStartupDiagnostics.WriteReport(ex, "SolveInstance", null);
+                var reportMessage = report.Written
+                    ? $"Report: {report.Detail}"
+                    : $"Report unavailable: {report.Detail}";
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"MCP Component Error: {ex.Message}. {reportMessage}");
                 _shouldBeRunning = false;
-                lock (_statusLock) _currentStatus = "Error";
-                da.SetDataList(0, new List<string> { $"Error: {ex.Message}" });
+                lock (_statusLock) _currentStatus = report.Written ? "Error (report written)" : "Error";
+                da.SetDataList(0, new List<string> { $"Error: {ex.Message}", reportMessage });
             }
         }
 
@@ -475,13 +502,17 @@ namespace Cassis
         {
             lock (_statusLock)
             {
+                if (_currentStatus.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Restart Server";
+                }
+
                 return _currentStatus switch
                 {
                     "Running" => "Stop Server",
                     "Starting" => "Starting...",
                     "Stopping" => "Stopping...",
                     "Stopped" => "Start Server",
-                    "Error" => "Restart Server",
                     _ => "Start Server"
                 };
             }

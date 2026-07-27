@@ -820,6 +820,8 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// </summary>
     private async Task<JsonRpcResponse> HandleInitializeRequest(JsonRpcRequest request)
     {
+        var serverInfo = _options.ServerInfo
+            ?? throw new InvalidOperationException("MCP server information is not configured.");
 
         var response = new JsonRpcResponse
         {
@@ -828,7 +830,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             {
                 protocolVersion = "2025-06-18",
                 capabilities = new { tools = new { }, prompts = new { } },
-                serverInfo = new { name = "Cassis", version = "1.3.0" }
+                serverInfo
             })
         };
 

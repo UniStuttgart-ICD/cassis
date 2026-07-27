@@ -27,6 +27,16 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
     /// </summary>
     public CassisHost(string prefix, IEnumerable<string>? enabledTools = null)
     {
+        if (prefix == null)
+        {
+            throw new ArgumentNullException(nameof(prefix));
+        }
+
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            throw new ArgumentException("MCP prefix is required.", nameof(prefix));
+        }
+
         var logPath = Path.Combine(Path.GetTempPath(), "cassis_debug.log");
         
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating services...");
@@ -75,6 +85,14 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
         try
         {
             options = _services.GetRequiredService<IOptions<McpServerOptions>>().Value;
+            var assemblyVersion = typeof(CassisHost).Assembly.GetName().Version
+                ?? throw new InvalidOperationException("Cassis assembly version is unavailable.");
+            options.ServerInfo = new Implementation
+            {
+                Name = "Cassis",
+                Title = "Cassis",
+                Version = assemblyVersion.ToString(3),
+            };
             Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Options resolved.");
         }
         catch (Exception ex)

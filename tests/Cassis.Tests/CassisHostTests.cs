@@ -1,5 +1,7 @@
 using System;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -12,8 +14,17 @@ namespace Cassis.Tests;
 [TestFixture]
 public class CassisHostTests
 {
-    private readonly string _testPrefix = "http://localhost:3001/test/";
+    private readonly string _testPrefix = CreateLoopbackPrefix("test");
     private readonly HttpClient _httpClient = new();
+
+    private static string CreateLoopbackPrefix(string path)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return $"http://localhost:{port}/{path}/";
+    }
 
     [Test]
     public void Constructor_Throws_For_Null_Prefix()
@@ -310,7 +321,7 @@ public class CassisHostTests
     public async Task Regression_AssemblyRename_ToolsListReturnsAtLeastOneTool()
     {
         // Proves the Cassis assembly is discovered (before the fix, zero tools were returned)
-        var prefix = "http://localhost:3002/regression1/";
+        var prefix = CreateLoopbackPrefix("regression1");
         await using var host = new CassisHost(prefix);
         using var client = new HttpClient();
 
@@ -326,7 +337,7 @@ public class CassisHostTests
     public async Task Regression_AttributeName_ToolAppearsUnderAttributeNameNotMethodName()
     {
         // [McpServerTool(Name = "Get_ComponentCount")] should surface as "get_componentcount", not "getcomponentcount"
-        var prefix = "http://localhost:3003/regression2/";
+        var prefix = CreateLoopbackPrefix("regression2");
         await using var host = new CassisHost(prefix);
         using var client = new HttpClient();
 
@@ -344,7 +355,7 @@ public class CassisHostTests
     public async Task Regression_MethodNameFallback_ToolAppearsUnderMethodName()
     {
         // [McpServerTool] with no Name on method GetSystemHealth → key "getsystemhealth"
-        var prefix = "http://localhost:3004/regression3/";
+        var prefix = CreateLoopbackPrefix("regression3");
         await using var host = new CassisHost(prefix);
         using var client = new HttpClient();
 
@@ -360,7 +371,7 @@ public class CassisHostTests
     public async Task Regression_RestrictedEnabledTools_OnlyExposesAllowedTools()
     {
         // Host restricted to ["getsystemhealth"] must expose that tool and hide others
-        var prefix = "http://localhost:3005/regression4/";
+        var prefix = CreateLoopbackPrefix("regression4");
         await using var host = new CassisHost(prefix, enabledTools: new[] { "getsystemhealth" });
         using var client = new HttpClient();
 
@@ -377,7 +388,7 @@ public class CassisHostTests
     [Test]
     public async Task Regression_ComponentStateTools_AreDiscoverable()
     {
-        var prefix = "http://localhost:3006/regression5/";
+        var prefix = CreateLoopbackPrefix("regression5");
         await using var host = new CassisHost(prefix);
         using var client = new HttpClient();
 
