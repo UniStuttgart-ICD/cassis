@@ -12,6 +12,12 @@ $restrictedTerms = @(
     -join ([char[]](65, 66, 120, 77)),
     -join ([char[]](82, 65, 68, 114))
 )
+$legacyProductNames = @(
+    -join ([char[]](71, 114, 97, 115, 115, 104, 111, 112, 112, 101, 114, 77, 67, 80)),
+    -join ([char[]](103, 114, 97, 115, 115, 104, 111, 112, 112, 101, 114, 95, 109, 99, 112)),
+    -join ([char[]](103, 114, 97, 115, 115, 104, 111, 112, 112, 101, 114, 45, 109, 99, 112)),
+    -join ([char[]](71, 114, 97, 115, 115, 104, 111, 112, 112, 101, 114, 32, 77, 67, 80))
+)
 $privateKeyExtensions = @(".snk", ".pfx", ".p12", ".pem", ".key")
 $privateKeyMarkers = @(
     "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t",
@@ -64,6 +70,26 @@ function Assert-FileAllowed {
     }
 }
 
+function Assert-LegacyProductNameAbsent {
+    param([Parameter(Mandatory)][string]$Path)
+
+    foreach ($name in $legacyProductNames) {
+        if ($Path.IndexOf($name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "Legacy product name found in path: $Path"
+        }
+    }
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    foreach ($encoding in $scanEncodings) {
+        $text = $encoding.GetString($bytes)
+        foreach ($name in $legacyProductNames) {
+            if ($text.IndexOf($name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "Legacy product name found in $Path"
+            }
+        }
+    }
+}
+
 Push-Location $repoRoot
 try {
     $trackedFiles = @(& git ls-files)
@@ -75,10 +101,11 @@ try {
         $fullPath = Join-Path $repoRoot $relativePath
         if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
             Assert-FileAllowed -Path $fullPath
+            Assert-LegacyProductNameAbsent -Path $fullPath
         }
     }
 
-    [xml]$project = Get-Content -LiteralPath "src\GrasshopperMCP\GrasshopperMCP.csproj" -Raw
+    [xml]$project = Get-Content -LiteralPath "src\Cassis\Cassis.csproj" -Raw
     $projectVersion = ([string]$project.Project.PropertyGroup.Version).Trim()
     $manifestText = Get-Content -LiteralPath "manifest.yml" -Raw
     $manifestVersion = [regex]::Match($manifestText, "(?m)^version:\s*(\S+)\s*$").Groups[1].Value
@@ -185,7 +212,10 @@ if ($Archive) {
         }
 
         Get-ChildItem -LiteralPath $tempRoot -Recurse -File |
-            ForEach-Object { Assert-FileAllowed -Path $_.FullName }
+            ForEach-Object {
+                Assert-FileAllowed -Path $_.FullName
+                Assert-LegacyProductNameAbsent -Path $_.FullName
+            }
 
         $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
             (Join-Path $packageRoot "Cassis.gha")).ProductVersion

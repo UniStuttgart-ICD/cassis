@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, Tuple
 
 
 class MCPClient:
-    """Client for communicating with GrasshopperMCP server."""
+    """Client for communicating with Cassis server."""
     
     def __init__(self, url: str = None, timeout: int = 10):
         self.url = url or os.getenv('MCP_URL', 'http://localhost:3003/mcp/')

@@ -24,10 +24,10 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore
-        run: dotnet restore GrasshopperMCP.sln
+        run: dotnet restore Cassis.sln
 
       - name: Build
-        run: dotnet build GrasshopperMCP.sln --configuration Release --no-restore --no-incremental
+        run: dotnet build Cassis.sln --configuration Release --no-restore --no-incremental
 
       - name: Test transport
         run: dotnet test tests/ModelContextProtocol.HttpListener.Tests/ModelContextProtocol.HttpListener.Tests.csproj --configuration Release --no-build
@@ -35,7 +35,7 @@ jobs:
       - name: Audit dependencies
         shell: pwsh
         run: |
-          $lines = & dotnet list GrasshopperMCP.sln package --vulnerable --include-transitive 2>&1
+          $lines = & dotnet list Cassis.sln package --vulnerable --include-transitive 2>&1
           $exitCode = $LASTEXITCODE
           $report = $lines -join "`n"
           Write-Host $report
@@ -50,7 +50,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          [xml] $project = Get-Content src/GrasshopperMCP/GrasshopperMCP.csproj -Raw
+          [xml] $project = Get-Content src/Cassis/Cassis.csproj -Raw
           $expectedTag = "v$(([string] $project.Project.PropertyGroup.Version).Trim())"
           if ($env:GITHUB_REF_NAME -ne $expectedTag) {
             throw "Tag $env:GITHUB_REF_NAME does not match project version $expectedTag."

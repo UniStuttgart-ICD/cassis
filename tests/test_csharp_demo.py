@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Quick C# Script Testing Demo
-Tests the C# script functionality in the Grasshopper MCP tester
+Tests the C# script functionality in the Cassis tester
 Includes component output and error checking
 """
 
@@ -64,8 +64,8 @@ def _extract_payload(response: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _make_mcp_request(tool_name: str, arguments: Dict[str, Any]) -> Tuple[bool, Union[Dict[str, Any], str]]:
-    """Make an MCP request and return (success, response) tuple like grasshopper_mcp_tester"""
-    from grasshopper_mcp_tester import make_mcp_request
+    """Make an MCP request and return (success, response) tuple like cassis_tester"""
+    from cassis_tester import make_mcp_request
 
     success, response = make_mcp_request("tools/call", {"name": tool_name, "arguments": arguments})
     return success, response
@@ -906,7 +906,7 @@ A = xVal + yVal;'''
 
 def main():
     """Main demo function"""
-    print("🔷 Grasshopper MCP C# Script Testing Demo")
+    print("🔷 Cassis C# Script Testing Demo")
     print("=" * 60)
     print()
     print("This demo will test:")
@@ -924,7 +924,7 @@ def main():
     
     # Check if MCP server is available
     try:
-        from grasshopper_mcp_tester import check_mcp_connection
+        from cassis_tester import check_mcp_connection
         if not check_mcp_connection():
             print("❌ MCP server not available. Please start the server first.")
             return

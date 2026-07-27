@@ -10,16 +10,16 @@
 ```bash
 git clone https://github.com/UniStuttgart-ICD/cassis.git
 cd cassis
-dotnet build -f net8.0-windows src/GrasshopperMCP/GrasshopperMCP.csproj
+dotnet build -f net8.0-windows src/Cassis/Cassis.csproj
 ```
 
 The built plugin deploys to `%APPDATA%\Grasshopper\Libraries`.
 
 ## Project Structure
 
-- `src/GrasshopperMCP/` -- plugin source (component, transport, tools)
-- `src/GrasshopperMCP/Tools/` -- MCP tool implementations grouped by category
-- `src/GrasshopperMCP/Tools/GrasshopperPrompts.cs` -- MCP prompt definitions
+- `src/Cassis/` -- plugin source (component, transport, tools)
+- `src/Cassis/Tools/` -- MCP tool implementations grouped by category
+- `src/Cassis/Tools/GrasshopperPrompts.cs` -- MCP prompt definitions
 - `tests/` -- unit and integration tests
 
 ## Coding Conventions
@@ -44,7 +44,7 @@ dotnet test tests/ModelContextProtocol.HttpListener.Tests/ModelContextProtocol.H
 The Grasshopper test project requires a local Rhino 8 installation:
 
 ```bash
-dotnet test tests/GrasshopperMCP.Tests/GrasshopperMCP.Tests.csproj -f net48
+dotnet test tests/Cassis.Tests/Cassis.Tests.csproj -f net48
 ```
 
 ## Pull Request Process

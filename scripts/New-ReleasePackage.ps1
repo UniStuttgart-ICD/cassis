@@ -9,9 +9,9 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts"))
-$project = Join-Path $repoRoot "src\GrasshopperMCP\GrasshopperMCP.csproj"
+$project = Join-Path $repoRoot "src\Cassis\Cassis.csproj"
 $framework = "net8.0-windows"
-$outputDir = Join-Path $artifactsRoot "bin\GrasshopperMCP\$Configuration\$framework"
+$outputDir = Join-Path $artifactsRoot "bin\Cassis\$Configuration\$framework"
 $releaseDir = Join-Path $artifactsRoot "release"
 $stageDir = Join-Path $releaseDir "Cassis"
 $archive = Join-Path $releaseDir "Cassis.zip"
