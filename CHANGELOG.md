@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-07-27
+
+### Fixed
+
+- The MCP listener remains active while concurrent requests trigger Grasshopper recomputations
+- Failed listener starts release their server instance so the component can be started again
+- Unexpected listener shutdowns record the reason and stack trace in the Cassis diagnostic report
+
 ## [1.3.1] - 2026-07-27
 
 ### Added

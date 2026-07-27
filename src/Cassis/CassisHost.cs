@@ -130,6 +130,9 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
         }
     }
 
+    /// <summary>Completes when the transport listener stops.</summary>
+    public Task Completion => _transport.Completion;
+
     /// <summary>Starts listening for requests.</summary>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {

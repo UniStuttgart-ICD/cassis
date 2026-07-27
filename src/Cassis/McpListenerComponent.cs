@@ -5,6 +5,7 @@ using Grasshopper.GUI;
 using Grasshopper.GUI.Canvas;
 using System.Drawing.Drawing2D;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
@@ -37,7 +38,7 @@ namespace Cassis
         private CassisHost? _server;
         private CancellationTokenSource? _cts;
         private readonly List<string> _logs = new();
-        private readonly List<string> _messages = new();
+        private readonly ConcurrentQueue<string> _messages = new();
 
         private DateTime? _serverStartTime;
         private DateTime? _lastMessageTime;
@@ -171,10 +172,12 @@ namespace Cassis
                         Rhino.RhinoApp.WriteLine($"[MCP] Prefix: {actualPrefix}");
 
                         Rhino.RhinoApp.WriteLine("[MCP] Creating CassisHost...");
-                        _server = new CassisHost(actualPrefix, _enabledTools);
+                        var server = new CassisHost(actualPrefix, _enabledTools);
                         Rhino.RhinoApp.WriteLine("[MCP] CassisHost created successfully");
-                        _server.MessageReceived += OnMessage;
-                        _cts = new CancellationTokenSource();
+                        server.MessageReceived += OnMessage;
+                        var cts = new CancellationTokenSource();
+                        _server = server;
+                        _cts = cts;
 
                         Rhino.RhinoApp.WriteLine("[MCP] Starting Task.Run for StartAsync...");
                         Task.Run(async () =>
@@ -182,15 +185,19 @@ namespace Cassis
                             try
                             {
                                 Rhino.RhinoApp.WriteLine("[MCP] Calling StartAsync...");
-                                await _server.StartAsync(_cts.Token);
+                                await server.StartAsync(cts.Token);
                                 Rhino.RhinoApp.WriteLine("[MCP] StartAsync completed successfully!");
 
                                 lock (_statusLock)
                                 {
-                                    _currentStatus = "Running";
-                                    _serverStartTime = DateTime.UtcNow;
+                                    if (ReferenceEquals(_server, server))
+                                    {
+                                        _currentStatus = "Running";
+                                        _serverStartTime = DateTime.UtcNow;
+                                    }
                                 }
 
+                                _ = ObserveServerCompletionAsync(server, cts, actualPrefix);
                                 Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
                                 {
                                     ExpireSolution(true);
@@ -205,15 +212,27 @@ namespace Cassis
                                     report.Written
                                         ? $"[MCP ERROR] Startup report: {report.Detail}"
                                         : $"[MCP ERROR] Startup report unavailable: {report.Detail}");
+                                var ownsServer = false;
                                 lock (_statusLock)
                                 {
-                                    _currentStatus = report.Written ? "Error (report written)" : "Error";
-                                    _messages.Add(
-                                        report.Written
-                                            ? $"MCP startup report: {report.Detail}"
-                                            : $"MCP startup report unavailable: {report.Detail}");
+                                    if (ReferenceEquals(_server, server))
+                                    {
+                                        ownsServer = true;
+                                        _server = null;
+                                        _cts = null;
+                                        _shouldBeRunning = false;
+                                        _currentStatus = report.Written ? "Error (report written)" : "Error";
+                                        _messages.Enqueue(
+                                            report.Written
+                                                ? $"MCP startup report: {report.Detail}"
+                                                : $"MCP startup report unavailable: {report.Detail}");
+                                    }
                                 }
-                                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
+                                if (ownsServer)
+                                {
+                                    await DisposeServerAsync(server, cts).ConfigureAwait(false);
+                                    Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
+                                }
                             }
                         });
                         lock (_statusLock)
@@ -234,7 +253,7 @@ namespace Cassis
                         lock (_statusLock)
                         {
                             _currentStatus = report.Written ? "Error (report written)" : "Error";
-                            _messages.Add(
+                            _messages.Enqueue(
                                 report.Written
                                     ? $"MCP startup report: {report.Detail}"
                                     : $"MCP startup report unavailable: {report.Detail}");
@@ -283,7 +302,7 @@ namespace Cassis
                     }
                 }
 
-                da.SetDataList(0, _messages);
+                da.SetDataList(0, _messages.ToArray());
             }
             catch (Exception ex)
             {
@@ -292,15 +311,22 @@ namespace Cassis
                     ? $"Report: {report.Detail}"
                     : $"Report unavailable: {report.Detail}";
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"MCP Component Error: {ex.Message}. {reportMessage}");
-                _shouldBeRunning = false;
-                lock (_statusLock) _currentStatus = report.Written ? "Error (report written)" : "Error";
+                lock (_statusLock)
+                {
+                    if (_server is null)
+                    {
+                        _currentStatus = report.Written ? "Error (report written)" : "Error";
+                    }
+                }
                 da.SetDataList(0, new List<string> { $"Error: {ex.Message}", reportMessage });
             }
         }
 
         private void ResetCounters()
         {
-            _messages.Clear();
+            while (_messages.TryDequeue(out _))
+            {
+            }
             _logs.Clear();
             _connectionLog.Clear();
             _totalMessagesReceived = 0;
@@ -316,22 +342,75 @@ namespace Cassis
             _server = null;
             _cts = null;
 
-            Task.Run(async () =>
+            _ = DisposeServerAsync(server, cts);
+        }
+
+        private static async Task DisposeServerAsync(CassisHost? server, CancellationTokenSource? cts)
+        {
+            try
             {
-                try
+                cts?.Cancel();
+                if (server is not null)
                 {
-                    if (server is not null)
-                    {
-                        await server.StopAsync().ConfigureAwait(false);
-                        await server.DisposeAsync().ConfigureAwait(false);
-                    }
-                    cts?.Dispose();
+                    await server.StopAsync().ConfigureAwait(false);
+                    await server.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (Exception ex)
+            }
+            catch (Exception ex)
+            {
+                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing server: {ex}");
+            }
+            finally
+            {
+                cts?.Dispose();
+            }
+        }
+
+        private async Task ObserveServerCompletionAsync(
+            CassisHost server,
+            CancellationTokenSource cts,
+            string prefix)
+        {
+            Exception? failure = null;
+            try
+            {
+                await server.Completion.ConfigureAwait(false);
+                if (!cts.IsCancellationRequested)
                 {
-                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing server: {ex.Message}");
+                    failure = new InvalidOperationException("The MCP listener stopped without a shutdown request.");
                 }
-            });
+            }
+            catch (Exception ex) when (!cts.IsCancellationRequested)
+            {
+                failure = ex;
+            }
+
+            if (failure is null)
+            {
+                return;
+            }
+
+            var report = McpStartupDiagnostics.WriteReport(failure, "Listener lifetime", prefix);
+            Rhino.RhinoApp.WriteLine($"[MCP ERROR] Listener stopped unexpectedly: {failure}");
+            lock (_statusLock)
+            {
+                if (!ReferenceEquals(_server, server))
+                {
+                    return;
+                }
+
+                _server = null;
+                _cts = null;
+                _shouldBeRunning = false;
+                _currentStatus = report.Written ? "Error (report written)" : "Error";
+                _messages.Enqueue(
+                    report.Written
+                        ? $"MCP listener report: {report.Detail}"
+                        : $"MCP listener report unavailable: {report.Detail}");
+            }
+
+            await DisposeServerAsync(server, cts).ConfigureAwait(false);
+            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
         }
 
         // === Networking utils (same idea as original) ===
@@ -435,7 +514,7 @@ namespace Cassis
                 }
             }
 
-            _messages.Add(JsonSerializer.Serialize(msg));
+            _messages.Enqueue(JsonSerializer.Serialize(msg));
 
             if (refreshListenerUi)
             {
@@ -568,7 +647,7 @@ namespace Cassis
             {
                 lock (_statusLock)
                 {
-                    _shouldBeRunning = _currentStatus == "Running" ? false : true;
+                    _shouldBeRunning = !_shouldBeRunning;
                     _currentStatus = _shouldBeRunning ? "Starting" : "Stopping";
                 }
                 Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { ExpireSolution(true); }));

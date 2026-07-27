@@ -49,6 +49,11 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>Raised whenever a JSON‑RPC message is received.</summary>
     public event Action<JsonRpcMessage>? MessageReceived;
 
+    /// <summary>
+    /// Completes when the listener loop stops and faults when it stops unexpectedly.
+    /// </summary>
+    public Task Completion => _listenTask ?? Task.CompletedTask;
+
     public HttpListenerMcpTransport(
         string prefix,
         McpServerOptions options,
@@ -318,17 +323,26 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 context = await _listener.GetContextAsync().WaitAsync(token);
 #endif
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested || _stopping)
             {
+                WriteDebugLog("[MCP HTTP] Listener stopped because cancellation was requested.");
                 break;
             }
-            catch (HttpListenerException)
+            catch (HttpListenerException ex) when (token.IsCancellationRequested || _stopping)
             {
+                WriteDebugLog($"[MCP HTTP] Listener stopped during shutdown: {ex}");
                 break;
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex) when (token.IsCancellationRequested || _stopping || _disposed)
             {
+                WriteDebugLog($"[MCP HTTP] Listener disposed during shutdown: {ex}");
                 break;
+            }
+            catch (Exception ex)
+            {
+                WriteDebugLog($"[MCP ERROR] Listener stopped unexpectedly: {ex}");
+                _logger?.LogError(ex, "MCP listener stopped unexpectedly");
+                throw new InvalidOperationException("The MCP listener stopped unexpectedly.", ex);
             }
 
             if (!_requestSlots.Wait(0))
@@ -1312,7 +1326,17 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
 
         if (_listenTask is not null)
-            await _listenTask.ConfigureAwait(false);
+        {
+            try
+            {
+                await _listenTask.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                WriteDebugLog($"[MCP ERROR] Listener task was already faulted when stopping: {ex}");
+                _logger?.LogError(ex, "Listener task was already faulted when stopping");
+            }
+        }
 
         lock (_lock)
         {
