@@ -104,23 +104,7 @@ function Assert-FileAllowed {
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     foreach ($encoding in $scanEncodings) {
         $text = $encoding.GetString($bytes)
-        foreach ($term in $restrictedTerms) {
-            if ($text.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                throw "Restricted content found in $Path"
-            }
-        }
-
-        foreach ($pattern in $restrictedPatterns) {
-            if ($pattern.IsMatch($text)) {
-                throw "Restricted content found in $Path"
-            }
-        }
-
-        foreach ($privateBuildPath in $privateBuildPaths) {
-            if ($text.IndexOf($privateBuildPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                throw "Private build path found in $Path"
-            }
-        }
+        Assert-TextAllowed -Text $text -Source $Path
 
         foreach ($marker in $privateKeyMarkers) {
             if ($text.IndexOf($marker, [System.StringComparison]::Ordinal) -ge 0) {
@@ -220,21 +204,21 @@ try {
         finally {
             if (Test-Path -LiteralPath $historyRoot) {
                 Remove-Item -LiteralPath $historyRoot -Recurse -Force
-                    }
-                }
-            }
-
-            $annotatedTags = @(& git for-each-ref refs/tags --format="%(objecttype) %(objectname)") |
-                Where-Object { $_.StartsWith("tag ") } |
-                ForEach-Object { $_.Substring(4) }
-            foreach ($tagObject in $annotatedTags) {
-                $tagMetadata = (& git cat-file tag $tagObject) -join "`n"
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Unable to inspect tag metadata for $tagObject."
-                }
-                Assert-TextAllowed -Text $tagMetadata -Source "tag $tagObject"
             }
         }
+
+        $annotatedTags = @(& git for-each-ref refs/tags --format="%(objecttype) %(objectname)") |
+            Where-Object { $_.StartsWith("tag ") } |
+            ForEach-Object { $_.Substring(4) }
+        foreach ($tagObject in $annotatedTags) {
+            $tagMetadata = (& git cat-file tag $tagObject) -join "`n"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to inspect tag metadata for $tagObject."
+            }
+            Assert-TextAllowed -Text $tagMetadata -Source "tag $tagObject"
+        }
+    }
+}
 finally {
     Pop-Location
 }
