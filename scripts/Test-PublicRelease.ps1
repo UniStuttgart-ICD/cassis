@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Archive,
+    [string]$YakArchive,
     [switch]$CheckHistory,
     [string]$HistoryRef
 )
@@ -194,6 +195,75 @@ if ($Archive) {
             (Join-Path $packageRoot "Cassis.gha")).ProductVersion
         if (!$productVersion.StartsWith($projectVersion, [System.StringComparison]::Ordinal)) {
             throw "Cassis.gha version $productVersion does not match $projectVersion."
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempRoot) {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+    }
+}
+
+if ($YakArchive) {
+    $yakArchivePath = [System.IO.Path]::GetFullPath($YakArchive)
+    if (!(Test-Path -LiteralPath $yakArchivePath -PathType Leaf)) {
+        throw "Yak package not found: $yakArchivePath"
+    }
+
+    $expectedYakName = "cassis-$projectVersion-rh8_0-win.yak"
+    if ([System.IO.Path]::GetFileName($yakArchivePath) -ne $expectedYakName) {
+        throw "Unexpected Yak package name: $([System.IO.Path]::GetFileName($yakArchivePath))"
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("cassis-yak-check-" + [guid]::NewGuid())
+    try {
+        New-Item -ItemType Directory -Path $tempRoot | Out-Null
+        $zipPath = Join-Path $tempRoot "package.zip"
+        $packageRoot = Join-Path $tempRoot "package"
+        Copy-Item -LiteralPath $yakArchivePath -Destination $zipPath
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $packageRoot
+
+        $requiredFiles = @(
+            "manifest.yml",
+            "logo\cassis_logo.png",
+            "LICENSE",
+            "THIRD-PARTY-NOTICES.md",
+            "net48\Cassis.gha",
+            "net48\System.Text.Json.dll",
+            "net8.0\Cassis.gha",
+            "net8.0\System.Text.Json.dll",
+            "net8.0-windows\Cassis.gha",
+            "net8.0-windows\System.Text.Json.dll"
+        )
+        foreach ($requiredFile in $requiredFiles) {
+            if (!(Test-Path -LiteralPath (Join-Path $packageRoot $requiredFile) -PathType Leaf)) {
+                throw "Yak package is missing $requiredFile"
+            }
+        }
+
+        $unexpectedFiles = Get-ChildItem -LiteralPath $packageRoot -Recurse -File |
+            Where-Object { $_.Extension -in @(".pdb", ".json") }
+        if ($unexpectedFiles) {
+            throw "Yak package contains build-only files: $($unexpectedFiles.Name -join ', ')"
+        }
+
+        Get-ChildItem -LiteralPath $packageRoot -Recurse -File |
+            ForEach-Object {
+                Assert-FileAllowed -Path $_.FullName
+            }
+
+        $yakManifest = Get-Content -LiteralPath (Join-Path $packageRoot "manifest.yml") -Raw
+        $yakVersion = [regex]::Match($yakManifest, "(?m)^version:\s*(\S+)\s*$").Groups[1].Value
+        if ($yakVersion -ne $projectVersion) {
+            throw "Yak manifest version $yakVersion does not match $projectVersion."
+        }
+
+        foreach ($framework in @("net48", "net8.0", "net8.0-windows")) {
+            $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
+                (Join-Path $packageRoot "$framework\Cassis.gha")).ProductVersion
+            if (!$productVersion.StartsWith($projectVersion, [System.StringComparison]::Ordinal)) {
+                throw "$framework Cassis.gha version $productVersion does not match $projectVersion."
+            }
         }
     }
     finally {
