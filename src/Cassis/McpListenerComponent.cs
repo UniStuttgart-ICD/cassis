@@ -252,6 +252,7 @@ namespace Cassis
                                 : $"[MCP ERROR] Startup report unavailable: {report.Detail}");
                         lock (_statusLock)
                         {
+                            _shouldBeRunning = false;
                             _currentStatus = report.Written ? "Error (report written)" : "Error";
                             _messages.Enqueue(
                                 report.Written

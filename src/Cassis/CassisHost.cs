@@ -106,8 +106,15 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Logger factory resolved.");
 
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating transport...");
-        // Create transport
-        _transport = new HttpListenerMcpTransport(prefix, options, loggerFactory, _services, logPath, allowedToolNames);
+        try
+        {
+            _transport = new HttpListenerMcpTransport(prefix, options, loggerFactory, _services, logPath, allowedToolNames);
+        }
+        catch
+        {
+            _services.Dispose();
+            throw;
+        }
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Transport created.");
 
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Completed successfully!");

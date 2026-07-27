@@ -6,6 +6,7 @@ using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Cassis.Diagnostics;
 
@@ -43,11 +44,12 @@ internal static class McpStartupDiagnostics
 
     public static McpStartupReportResult WriteReport(Exception exception, string phase, string? prefix)
     {
-        var path = Path.Combine(Path.GetTempPath(), "cassis_mcp_startup_report.txt");
+        var fileName = $"cassis_mcp_report_{DateTime.UtcNow:yyyyMMddTHHmmssfff}_{Guid.NewGuid():N}.txt";
+        var path = Path.Combine(Path.GetTempPath(), fileName);
 
         try
         {
-            var report = BuildReport(exception, phase, prefix);
+            var report = RedactUserProfile(BuildReport(exception, phase, prefix));
             File.WriteAllText(path, report, Encoding.UTF8);
             return new McpStartupReportResult(true, path);
         }
@@ -57,6 +59,18 @@ internal static class McpStartupDiagnostics
                 false,
                 $"Failed to write startup report to {path}: {writeException}");
         }
+    }
+
+    private static string RedactUserProfile(string report)
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return string.IsNullOrWhiteSpace(userProfile)
+            ? report
+            : Regex.Replace(
+                report,
+                Regex.Escape(userProfile.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+                "%USERPROFILE%",
+                RegexOptions.IgnoreCase);
     }
 
     private static string BuildReport(Exception exception, string phase, string? prefix)

@@ -364,6 +364,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 }
                 catch (Exception ex)
                 {
+                    WriteDebugLog($"[MCP ERROR] Unhandled MCP request error: {ex}");
                     _logger?.LogError(ex, "Unhandled MCP request error");
                     try
                     {
@@ -503,6 +504,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
+            WriteDebugLog($"[MCP WARN] SSE stream error for session {sessionId}: {ex}");
             _logger?.LogWarning("SSE stream error for session {SessionId}: {Message}", sessionId, ex.Message);
         }
         finally
@@ -669,6 +671,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
+            WriteDebugLog($"[MCP ERROR] POST response stream error for session {responseSessionId}: {ex}");
             _logger?.LogWarning("POST SSE stream error for session {SessionId}: {Message}", responseSessionId, ex.Message);
         }
         finally
@@ -806,12 +809,12 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
+            WriteDebugLog($"[MCP ERROR] MCP message processing failed: {ex}");
 
             // Send error response if it was a request
             if (message is JsonRpcRequest request)
             {
                 var errorResponse = CreateErrorResponse(request.Id, -32603, "Internal error", ex.Message);
-                MessageReceived?.Invoke(message);
                 return await TrySendToSessionAsync(errorResponse, sessionId).ConfigureAwait(false);
             }
 
