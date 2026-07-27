@@ -163,6 +163,52 @@ public class ToolPanelAttributes : ServerAttributes
         return false;
     }
 
+    public override bool IsTooltipRegion(PointF point)
+    {
+        if (_headerBounds.Contains(point))
+            return false;
+
+        if (_isPanelExpanded && _panelBounds.Contains(point))
+        {
+            var row = FindToolRow(point);
+            return row?.ToolName is { } toolName &&
+                   ToolDescriptionCatalog.TryGet(toolName, out _);
+        }
+
+        return base.IsTooltipRegion(point);
+    }
+
+    public override void SetupTooltip(PointF point, GH_TooltipDisplayEventArgs e)
+    {
+        if (_headerBounds.Contains(point) ||
+            (_isPanelExpanded && _panelBounds.Contains(point)))
+        {
+            var row = FindToolRow(point);
+            if (row?.ToolName is { } toolName &&
+                ToolDescriptionCatalog.TryGet(toolName, out var description))
+            {
+                e.Title = toolName;
+                e.Text = description;
+                e.Description = string.Empty;
+            }
+
+            return;
+        }
+
+        base.SetupTooltip(point, e);
+    }
+
+    private RowInfo? FindToolRow(PointF point)
+    {
+        foreach (var row in _visibleRows)
+        {
+            if (!row.IsCategory && row.Bounds.Contains(point))
+                return row;
+        }
+
+        return null;
+    }
+
     protected override void Render(GH_Canvas canvas, Graphics graphics, GH_CanvasChannel channel)
     {
         base.Render(canvas, graphics, channel);
