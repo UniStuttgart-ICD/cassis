@@ -275,20 +275,14 @@ namespace Cassis
 
                         Task.Run(async () =>
                         {
-                            try
+                            var stoppedCleanly = await DisposeServerAsync(s, cts).ConfigureAwait(false);
+                            lock (_statusLock)
                             {
-                                cts?.Cancel();
-                                await s.StopAsync().ConfigureAwait(false);
-                                await s.DisposeAsync().ConfigureAwait(false);
-                                cts?.Dispose();
-
-                                lock (_statusLock) _currentStatus = "Stopped";
-                                ResetCounters();
-                            }
-                            catch (Exception ex)
-                            {
-                                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error stopping server: {ex.Message}");
-                                lock (_statusLock) _currentStatus = "Error";
+                                _currentStatus = stoppedCleanly ? "Stopped" : "Error";
+                                if (stoppedCleanly)
+                                {
+                                    ResetCounters();
+                                }
                             }
                         });
                     }
@@ -346,25 +340,53 @@ namespace Cassis
             _ = DisposeServerAsync(server, cts);
         }
 
-        private static async Task DisposeServerAsync(CassisHost? server, CancellationTokenSource? cts)
+        private static async Task<bool> DisposeServerAsync(CassisHost? server, CancellationTokenSource? cts)
         {
+            var succeeded = true;
             try
             {
                 cts?.Cancel();
-                if (server is not null)
-                {
-                    await server.StopAsync().ConfigureAwait(false);
-                    await server.DisposeAsync().ConfigureAwait(false);
-                }
             }
             catch (Exception ex)
             {
-                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing server: {ex}");
+                succeeded = false;
+                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error cancelling server: {ex}");
             }
-            finally
+
+            if (server is not null)
+            {
+                try
+                {
+                    await server.StopAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    succeeded = false;
+                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error stopping server: {ex}");
+                }
+
+                try
+                {
+                    await server.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    succeeded = false;
+                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing server: {ex}");
+                }
+            }
+
+            try
             {
                 cts?.Dispose();
             }
+            catch (Exception ex)
+            {
+                succeeded = false;
+                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing cancellation source: {ex}");
+            }
+
+            return succeeded;
         }
 
         private async Task ObserveServerCompletionAsync(
@@ -648,6 +670,11 @@ namespace Cassis
             {
                 lock (_statusLock)
                 {
+                    if (!CanToggleServer(_currentStatus))
+                    {
+                        return;
+                    }
+
                     _shouldBeRunning = !_shouldBeRunning;
                     _currentStatus = _shouldBeRunning ? "Starting" : "Stopping";
                 }
@@ -659,6 +686,13 @@ namespace Cassis
                 lock (_statusLock) _currentStatus = "Error";
             }
 }
+
+        internal static bool CanToggleServer(string status)
+        {
+            return status != "Starting" &&
+                   status != "Stopping" &&
+                   status != "Restarting";
+        }
 
         // === Tool enable/disable ===
         private HashSet<string> _enabledTools = new(ToolCategories.DefaultEnabled);
@@ -715,17 +749,7 @@ namespace Cassis
                 try
                 {
                     Rhino.RhinoApp.WriteLine("[MCP INFO] Restarting transport after tool configuration change.");
-                    cts?.Cancel();
-                    if (server is not null)
-                    {
-                        await server.StopAsync().ConfigureAwait(false);
-                        await server.DisposeAsync().ConfigureAwait(false);
-                    }
-                    cts?.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error during transport restart cleanup: {ex.Message}");
+                    await DisposeServerAsync(server, cts).ConfigureAwait(false);
                 }
                 finally
                 {
