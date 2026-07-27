@@ -1,5 +1,5 @@
 name: cassis
-version: 1.3.0
+version: 1.3.1
 authors:
   - ICD University of Stuttgart
 description: MCP server plugin for Grasshopper that lets AI assistants read and edit Grasshopper definitions

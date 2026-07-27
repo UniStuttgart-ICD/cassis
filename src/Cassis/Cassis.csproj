@@ -34,7 +34,7 @@
 
     <PropertyGroup>
         <!-- Specifies information for Assembly and Yak -->
-        <Version>1.3.0</Version>
+        <Version>1.3.1</Version>
         <Title>Cassis</Title>
         <Company></Company>
         <Description>MCP server plugin for Grasshopper (Rhino 8) that lets AI assistants read and edit Grasshopper definitions</Description>
