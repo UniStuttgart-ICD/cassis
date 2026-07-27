@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Live regression for listener survival during repeated Grasshopper mutations."""
+"""Live regression for listener survival during repeated Grasshopper mutations.
+
+Enable the complete Scripts and Document categories in the Cassis tool panel first.
+The test creates and closes its own temporary Grasshopper document.
+"""
 
 import argparse
 import json
@@ -75,6 +79,8 @@ class LiveClient:
                 raise AssertionError(f"Tool returned an error: {item}")
             if isinstance(item, dict) and (item.get("success") is False or item.get("Success") is False):
                 raise AssertionError(f"Mutation failed: {item}")
+            if isinstance(item, dict) and item.get("ok") is False:
+                raise AssertionError(f"Tool failed: {item}")
         return message, response.text
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
@@ -110,7 +116,10 @@ def require_tools(available: Dict[str, str], requested: Iterable[str]) -> Dict[s
     for name in requested:
         key = normalized(name)
         if key not in available:
-            raise AssertionError(f"Required tool is not enabled: {name}")
+            raise AssertionError(
+                f"Required tool is not enabled: {name}. "
+                "Enable the complete Scripts and Document categories in the Cassis tool panel."
+            )
         resolved[name] = available[key]
     return resolved
 
@@ -160,13 +169,18 @@ def run(args: argparse.Namespace) -> None:
             "remove_script_parameter",
             "modify_script_component_parameters",
             "edit_csharp_script",
-            "removecomponents",
+            "newdocument",
+            "closedocument",
         ],
     )
 
     component_ids: List[str] = []
     sequential_requests = 0
+    temporary_document_open = False
     try:
+        client.call_tool(tools["newdocument"], {})
+        temporary_document_open = True
+
         for index in range(7):
             _, text = client.call_tool(
                 tools["addcsharpscriptcomponent"],
@@ -232,11 +246,11 @@ def run(args: argparse.Namespace) -> None:
             "across 7 components; 16 mutations from 4 concurrent clients; listener reachable."
         )
     finally:
-        if component_ids:
+        if temporary_document_open:
             try:
-                client.call_tool(tools["removecomponents"], {"componentIds": component_ids})
+                client.call_tool(tools["closedocument"], {"saveFirst": False})
             except Exception as error:
-                print(f"WARNING: temporary component cleanup failed: {error}")
+                print(f"WARNING: temporary document cleanup failed: {error}")
 
 
 def main() -> None:
