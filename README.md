@@ -45,7 +45,7 @@ The release zip includes `Cassis.gha`, the DLL files the plugin needs, the proje
 ```bash
 git clone https://github.com/UniStuttgart-ICD/cassis.git
 cd cassis
-dotnet build -f net8.0-windows src/GrasshopperMCP/GrasshopperMCP.csproj
+dotnet build -f net8.0-windows src/Cassis/Cassis.csproj
 ```
 
 The build deploys `Cassis.gha` to `%APPDATA%\Grasshopper\Libraries\Cassis\` automatically.
@@ -113,22 +113,22 @@ Prompts are also available for creating, analyzing, and troubleshooting Grasshop
 
 ```
 src/
-├── GrasshopperMCP/                       # Plugin assembly (Cassis.gha)
+├── Cassis/                       # Plugin assembly (Cassis.gha)
 │   ├── Tools/                            # MCP tool implementations
 │   ├── Services/                         # Grasshopper service interfaces + impls
 │   ├── MCP_grasshopper_native/           # Tool selection and registry
 │   └── UI/                               # Grasshopper component UI
 └── ModelContextProtocol.HttpListener/    # HTTP/SSE transport
 tests/
-├── GrasshopperMCP.Tests/                 # NUnit tests
-└── grasshopper_mcp_tester.py             # Python integration tests
+├── Cassis.Tests/                 # NUnit tests
+└── cassis_tester.py             # Python integration tests
 ```
 
 ### Commands
 
 ```bash
-dotnet restore GrasshopperMCP.sln
-dotnet build GrasshopperMCP.sln -c Release --no-restore --no-incremental
+dotnet restore Cassis.sln
+dotnet build Cassis.sln -c Release --no-restore --no-incremental
 dotnet test tests/ModelContextProtocol.HttpListener.Tests/ModelContextProtocol.HttpListener.Tests.csproj -c Release --no-build
 pwsh ./scripts/New-ReleasePackage.ps1 -NoBuild
 ```

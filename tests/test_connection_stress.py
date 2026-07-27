@@ -16,7 +16,7 @@ import statistics
 # Add the current directory to the path so we can import the tester
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from grasshopper_mcp_tester import make_mcp_request, check_mcp_connection
+from cassis_tester import make_mcp_request, check_mcp_connection
 from Common.mcp_utils import MCPClient
 
 
@@ -336,7 +336,7 @@ def test_connection_stability_check():
 
 def main():
     """Main stress test function"""
-    print("🔬 Grasshopper MCP Connection Stress Test Suite")
+    print("🔬 Cassis Connection Stress Test Suite")
     print("=" * 60)
     print()
     print("This suite will test:")
