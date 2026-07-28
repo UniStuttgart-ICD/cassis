@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
@@ -83,13 +83,14 @@ jobs:
       - name: Verify public release
         shell: pwsh
         run: |
-          $yak = @(Get-ChildItem artifacts/yak/Release/*.yak)
+          $yak = @(Get-ChildItem artifacts/yak/Release/*-win.yak)
           if ($yak.Count -ne 1) {
-            throw "Expected one Yak package, found $($yak.Count)."
+            throw "Expected one Windows Yak package, found $($yak.Count)."
           }
           ./scripts/Test-PublicRelease.ps1 `
             -Archive artifacts/release/Cassis.zip `
             -YakArchive $yak[0].FullName `
+            -YakPlatform win `
             -CheckHistory
 
       - name: Stage release artifacts
@@ -100,12 +101,97 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Cassis-release
+          name: Cassis-release-windows
+          path: artifacts/publish/*
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install Yak
+        shell: pwsh
+        run: |
+          $yak = Join-Path $env:RUNNER_TEMP "yak"
+          Invoke-WebRequest `
+            -Uri "https://files.mcneel.com/yak/tools/0.13.0/mac/yak" `
+            -OutFile $yak
+          $expected = "9fa311232d697ac98d64c86636723ea07b91d1263ebaeb9d931e0732e931a334"
+          $actual = (Get-FileHash -LiteralPath $yak -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Yak checksum mismatch: $actual"
+          }
+          & chmod +x $yak
+          "YAK_EXECUTABLE=$yak" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Restore
+        run: dotnet restore src/Cassis/Cassis.csproj
+
+      - name: Build
+        run: >-
+          dotnet build src/Cassis/Cassis.csproj
+          --configuration Release
+          --no-restore
+          --no-incremental
+          -p:BuildYakPackage=True
+          -p:YakExecutable="$YAK_EXECUTABLE"
+
+      - name: Audit dependencies
+        shell: pwsh
+        run: |
+          $lines = & dotnet list src/Cassis/Cassis.csproj package --vulnerable --include-transitive 2>&1
+          $exitCode = $LASTEXITCODE
+          $report = $lines -join "`n"
+          Write-Host $report
+          if ($exitCode -ne 0) {
+            throw "Dependency audit failed."
+          }
+          if ($report -match "has the following vulnerable packages") {
+            throw "Vulnerable dependencies were found."
+          }
+
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          [xml] $project = Get-Content src/Cassis/Cassis.csproj -Raw
+          $expectedTag = "v$(([string] $project.Project.PropertyGroup.Version).Trim())"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Tag $env:GITHUB_REF_NAME does not match project version $expectedTag."
+          }
+
+      - name: Verify public release
+        shell: pwsh
+        run: |
+          $yak = @(Get-ChildItem artifacts/yak/Release/*-mac.yak)
+          if ($yak.Count -ne 1) {
+            throw "Expected one macOS Yak package, found $($yak.Count)."
+          }
+          ./scripts/Test-PublicRelease.ps1 `
+            -YakArchive $yak[0].FullName `
+            -YakPlatform mac
+
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/publish -Force | Out-Null
+          Copy-Item artifacts/yak/Release/*-mac.yak artifacts/publish/
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Cassis-release-macos
           path: artifacts/publish/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,8 +199,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: Cassis-release
+          pattern: Cassis-release-*
           path: release
+          merge-multiple: true
 
       - name: Publish release
         env:

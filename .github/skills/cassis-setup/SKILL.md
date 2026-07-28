@@ -1,7 +1,7 @@
 <!-- Canonical source: skills/cassis-setup/SKILL.md -->
 ---
 name: cassis-setup
-description: Install the Cassis MCP plugin for Grasshopper (Rhino 8) on Windows and configure the MCP connection in your AI coding tool. Use when user says "install cassis", "set up cassis", "configure cassis MCP", or "set up grasshopper AI". Supports Codex, Claude Code, VS Code Copilot, Cursor, OpenCode, and Windsurf.
+description: Install the Cassis MCP plugin for Grasshopper (Rhino 8) on Windows or macOS and configure the MCP connection in your AI coding tool. Use when user says "install cassis", "set up cassis", "configure cassis MCP", or "set up grasshopper AI". Supports Codex, Claude Code, VS Code Copilot, Cursor, OpenCode, and Windsurf.
 ---
 
 # Cassis Setup
@@ -11,48 +11,23 @@ Guides the user through installing the Cassis Grasshopper plugin and connecting 
 ## Prerequisites
 
 - Rhino 8 installed
-- `Cassis.zip` downloaded from the project's GitHub releases page
+- Internet access to Rhino's Package Manager
 
-## Step 1: Locate the release archive
+## Step 1: Detect OS
 
-Ask the user where they saved `Cassis.zip`. Validate that the archive exists.
+Confirm that the operating system is Windows or macOS. Other platforms are not supported.
 
-If the user hasn't downloaded it yet, direct them to the project's GitHub releases page.
+## Step 2: Install the plugin
 
-## Step 2: Detect OS
+1. Start Rhino
+2. Run `_PackageManager`
+3. Search for **Cassis**
+4. Install the latest version
+5. Restart Rhino
 
-Confirm that the operating system is Windows. If it is not, stop and explain that the current Cassis release is Windows-only.
+Yak installs `net8.0-windows` on Windows and `net8.0` on macOS.
 
-## Step 3: Install the plugin
-
-### Windows
-
-```powershell
-$archive = Resolve-Path "<USER_CASSIS_ZIP_PATH>"
-$extract = Join-Path $env:TEMP ("cassis-install-" + [guid]::NewGuid())
-$libraryRoot = Join-Path $env:APPDATA "Grasshopper\Libraries"
-$target = Join-Path $libraryRoot "Cassis"
-
-Expand-Archive -LiteralPath $archive -DestinationPath $extract
-$source = Join-Path $extract "Cassis"
-if (-not (Test-Path -LiteralPath (Join-Path $source "Cassis.gha"))) {
-    throw "Cassis.zip does not contain the expected Cassis folder."
-}
-
-New-Item -ItemType Directory -Force -Path $libraryRoot | Out-Null
-if (Test-Path -LiteralPath $target) {
-    $backupRoot = Join-Path $env:LOCALAPPDATA "Cassis\Backups"
-    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-    $backup = Join-Path $backupRoot ("Cassis-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-    Move-Item -LiteralPath $target -Destination $backup
-}
-Copy-Item -LiteralPath $source -Destination $libraryRoot -Recurse
-Get-ChildItem -LiteralPath $target -File | Unblock-File
-```
-
-Replace `<USER_CASSIS_ZIP_PATH>` with the archive path from Step 1. Install the complete folder: the DLL files beside `Cassis.gha` are required.
-
-## Step 4: Detect AI framework
+## Step 3: Detect AI framework
 
 Determine which AI tool the user is running. Check in order:
 
@@ -65,7 +40,7 @@ Determine which AI tool the user is running. Check in order:
 
 If detection is ambiguous, ask the user which tool they are using.
 
-## Step 5: Configure MCP
+## Step 4: Configure MCP
 
 Consult [the MCP configuration guide](../../../skills/cassis-setup/references/mcp-config-guide.md) for the exact config format and file location for the detected framework.
 
@@ -80,25 +55,24 @@ Cassis must be configured as an HTTP or Streamable HTTP MCP server, not stdio.
 
 Frameworks name this transport differently (`http`, `url`, or `serverUrl`). The endpoint is always `http://localhost:3003/mcp/`.
 
-## Step 6: Verify installation
+## Step 5: Verify installation
 
 Tell the user to:
 1. Restart Rhino (if it was open)
 2. Open Grasshopper
 3. Search for "Cassis" in the component search bar
-4. Place the Cassis component on the canvas -- the MCP server starts automatically at `http://localhost:3003/mcp/`
+4. Place the Cassis component on the canvas and click **Start Server**
 5. Test the connection from their AI tool (e.g., ask the AI to "list all components on the Grasshopper canvas")
 
 ## Troubleshooting
 
 ### Plugin not loading
-- Verify the `Cassis` folder contains `Cassis.gha` and the DLL files from `Cassis.zip`
-- Do not install `Cassis.gha` by itself
-- On Windows, unblock every file in the `Cassis` folder
+- Reinstall Cassis through `_PackageManager`
+- Restart Rhino after installation
 - Ensure Rhino 8 (not 7 or earlier)
 
 ### MCP server not starting
-- Check that port 3003 is not already in use: `netstat -an | findstr 3003`
+- Check that port 3003 is not already in use
 - Look at the Cassis component for error messages on the canvas
 
 ### Connection refused from AI tool

@@ -2,6 +2,8 @@
 param(
     [string]$Archive,
     [string]$YakArchive,
+    [ValidateSet("win", "mac")]
+    [string]$YakPlatform,
     [switch]$CheckHistory,
     [string]$HistoryRef
 )
@@ -276,7 +278,19 @@ if ($YakArchive) {
         throw "Yak package not found: $yakArchivePath"
     }
 
-    $expectedYakName = "cassis-$projectVersion-rh8_0-win.yak"
+    $yakFileName = [System.IO.Path]::GetFileName($yakArchivePath)
+    if (!$YakPlatform) {
+        $platformMatch = [regex]::Match($yakFileName, "-(win|mac)\.yak$")
+        if (!$platformMatch.Success) {
+            throw "Unable to infer Yak platform from $yakFileName"
+        }
+        $YakPlatform = $platformMatch.Groups[1].Value
+    }
+
+    $expectedFramework = if ($YakPlatform -eq "win") { "net8.0-windows" } else { "net8.0" }
+    $unexpectedFrameworks = @("net48", "net8.0", "net8.0-windows") |
+        Where-Object { $_ -ne $expectedFramework }
+    $expectedYakName = "cassis-$projectVersion-rh8_0-$YakPlatform.yak"
     if ([System.IO.Path]::GetFileName($yakArchivePath) -ne $expectedYakName) {
         throw "Unexpected Yak package name: $([System.IO.Path]::GetFileName($yakArchivePath))"
     }
@@ -294,16 +308,17 @@ if ($YakArchive) {
             "logo\cassis_logo.png",
             "LICENSE",
             "THIRD-PARTY-NOTICES.md",
-            "net48\Cassis.gha",
-            "net48\System.Text.Json.dll",
-            "net8.0\Cassis.gha",
-            "net8.0\System.Text.Json.dll",
-            "net8.0-windows\Cassis.gha",
-            "net8.0-windows\System.Text.Json.dll"
+            "$expectedFramework\Cassis.gha",
+            "$expectedFramework\System.Text.Json.dll"
         )
         foreach ($requiredFile in $requiredFiles) {
             if (!(Test-Path -LiteralPath (Join-Path $packageRoot $requiredFile) -PathType Leaf)) {
                 throw "Yak package is missing $requiredFile"
+            }
+        }
+        foreach ($unexpectedFramework in $unexpectedFrameworks) {
+            if (Test-Path -LiteralPath (Join-Path $packageRoot $unexpectedFramework)) {
+                throw "$YakPlatform Yak package contains unexpected framework $unexpectedFramework"
             }
         }
 
@@ -323,13 +338,15 @@ if ($YakArchive) {
         if ($yakVersion -ne $projectVersion) {
             throw "Yak manifest version $yakVersion does not match $projectVersion."
         }
+        $manifestPlatform = [regex]::Match($yakManifest, "(?m)^platform:\s*(\S+)\s*$").Groups[1].Value
+        if ($manifestPlatform -ne $YakPlatform) {
+            throw "Yak manifest platform $manifestPlatform does not match $YakPlatform."
+        }
 
-        foreach ($framework in @("net48", "net8.0", "net8.0-windows")) {
-            $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
-                (Join-Path $packageRoot "$framework\Cassis.gha")).ProductVersion
-            if (!$productVersion.StartsWith($projectVersion, [System.StringComparison]::Ordinal)) {
-                throw "$framework Cassis.gha version $productVersion does not match $projectVersion."
-            }
+        $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
+            (Join-Path $packageRoot "$expectedFramework\Cassis.gha")).ProductVersion
+        if (!$productVersion.StartsWith($projectVersion, [System.StringComparison]::Ordinal)) {
+            throw "$expectedFramework Cassis.gha version $productVersion does not match $projectVersion."
         }
     }
     finally {
