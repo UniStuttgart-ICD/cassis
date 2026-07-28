@@ -27,6 +27,16 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
     /// </summary>
     public CassisHost(string prefix, IEnumerable<string>? enabledTools = null)
     {
+        if (prefix == null)
+        {
+            throw new ArgumentNullException(nameof(prefix));
+        }
+
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            throw new ArgumentException("MCP prefix is required.", nameof(prefix));
+        }
+
         var logPath = Path.Combine(Path.GetTempPath(), "cassis_debug.log");
         
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating services...");
@@ -68,33 +78,40 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Building service provider...");
         _services = services.BuildServiceProvider();
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Service provider built.");
-        _logger = _services.GetService<ILogger<CassisHost>>();
-
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Getting options...");
-        McpServerOptions options;
         try
         {
-            options = _services.GetRequiredService<IOptions<McpServerOptions>>().Value;
+            _logger = _services.GetService<ILogger<CassisHost>>();
+
+            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Getting options...");
+            var options = _services.GetRequiredService<IOptions<McpServerOptions>>().Value;
+            var assemblyVersion = typeof(CassisHost).Assembly.GetName().Version
+                ?? throw new InvalidOperationException("Cassis assembly version is unavailable.");
+            options.ServerInfo = new Implementation
+            {
+                Name = "Cassis",
+                Title = "Cassis",
+                Version = assemblyVersion.ToString(3),
+            };
             Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Options resolved.");
+
+            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Resolving logger factory...");
+            var loggerFactory = _services.GetService<ILoggerFactory>();
+            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Logger factory resolved.");
+
+            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating transport...");
+            _transport = new HttpListenerMcpTransport(prefix, options, loggerFactory, _services, logPath, allowedToolNames);
+            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Transport created.");
+
+            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Completed successfully!");
+            _logger?.LogInformation("CassisHost initialized with endpoint: {Prefix}", prefix);
+            _logger?.LogInformation("Debug log file: {LogPath}", logPath);
         }
         catch (Exception ex)
         {
-            Rhino.RhinoApp.WriteLine($"[MCP ERROR] CassisHost constructor: Failed to resolve options: {ex.Message}");
+            Rhino.RhinoApp.WriteLine($"[MCP ERROR] CassisHost initialization failed: {ex}");
+            _services.Dispose();
             throw;
         }
-
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Resolving logger factory...");
-        var loggerFactory = _services.GetService<ILoggerFactory>();
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Logger factory resolved.");
-
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating transport...");
-        // Create transport
-        _transport = new HttpListenerMcpTransport(prefix, options, loggerFactory, _services, logPath, allowedToolNames);
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Transport created.");
-
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Completed successfully!");
-        _logger?.LogInformation("CassisHost initialized with endpoint: {Prefix}", prefix);
-        _logger?.LogInformation("Debug log file: {LogPath}", logPath);
     }
 
     /// <summary>Occurs when an MCP message is received.</summary>
@@ -111,6 +128,9 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
             _logger?.LogDebug("MessageReceived event handler removed");
         }
     }
+
+    /// <summary>Completes when the transport listener stops.</summary>
+    public Task Completion => _transport.Completion;
 
     /// <summary>Starts listening for requests.</summary>
     public async Task StartAsync(CancellationToken cancellationToken = default)

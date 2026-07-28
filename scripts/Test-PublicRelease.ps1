@@ -13,6 +13,16 @@ $restrictedTerms = @(
     -join ([char[]](65, 66, 120, 77)),
     -join ([char[]](82, 65, 68, 114))
 )
+$legacyProductPart = -join ([char[]](71, 114, 97, 115, 115, 104, 111, 112, 112, 101, 114))
+$protocolPart = -join ([char[]](77, 67, 80))
+$restrictedPatterns = @(
+    [regex]::new(
+        "$([regex]::Escape($legacyProductPart))[^A-Za-z0-9]*$([regex]::Escape($protocolPart))",
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+    [regex]::new(
+        "$([regex]::Escape($protocolPart))[^A-Za-z0-9]*$([regex]::Escape($legacyProductPart))",
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+)
 $privateKeyExtensions = @(".snk", ".pfx", ".p12", ".pem", ".key")
 $privateKeyMarkers = @(
     "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t",
@@ -28,6 +38,18 @@ $scanEncodings = @(
     [System.Text.Encoding]::Unicode,
     [System.Text.Encoding]::BigEndianUnicode
 )
+$privateBuildPaths = @(
+    $repoRoot,
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+) |
+    Where-Object { ![string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object {
+        $path = $_.TrimEnd('\', '/')
+        $path
+        $path.Replace('\', '/')
+        $path.Replace('/', '\')
+    } |
+    Select-Object -Unique
 
 # Build restricted signatures at runtime so the verifier does not flag itself.
 function Assert-PathAllowed {
@@ -39,8 +61,39 @@ function Assert-PathAllowed {
         }
     }
 
+    foreach ($pattern in $restrictedPatterns) {
+        if ($pattern.IsMatch($Path)) {
+            throw "Restricted path found: $Path"
+        }
+    }
+
     if ($privateKeyExtensions -contains [System.IO.Path]::GetExtension($Path).ToLowerInvariant()) {
         throw "Private-key file found: $Path"
+    }
+}
+
+function Assert-TextAllowed {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$Source
+    )
+
+    foreach ($term in $restrictedTerms) {
+        if ($Text.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "Restricted content found in $Source"
+        }
+    }
+
+    foreach ($pattern in $restrictedPatterns) {
+        if ($pattern.IsMatch($Text)) {
+            throw "Restricted content found in $Source"
+        }
+    }
+
+    foreach ($privateBuildPath in $privateBuildPaths) {
+        if ($Text.IndexOf($privateBuildPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "Private build path found in $Source"
+        }
     }
 }
 
@@ -51,11 +104,7 @@ function Assert-FileAllowed {
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     foreach ($encoding in $scanEncodings) {
         $text = $encoding.GetString($bytes)
-        foreach ($term in $restrictedTerms) {
-            if ($text.IndexOf($term, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                throw "Restricted content found in $Path"
-            }
-        }
+        Assert-TextAllowed -Text $text -Source $Path
 
         foreach ($marker in $privateKeyMarkers) {
             if ($text.IndexOf($marker, [System.StringComparison]::Ordinal) -ge 0) {
@@ -123,6 +172,12 @@ try {
         try {
             New-Item -ItemType Directory -Path $historyRoot | Out-Null
             foreach ($commit in $commits) {
+                $commitMetadata = (& git cat-file commit $commit) -join "`n"
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Unable to inspect commit metadata for $commit."
+                }
+                Assert-TextAllowed -Text $commitMetadata -Source "commit $commit"
+
                 $paths = @(& git ls-tree -r --name-only $commit)
                 foreach ($path in $paths) {
                     Assert-PathAllowed -Path $path
@@ -150,6 +205,17 @@ try {
             if (Test-Path -LiteralPath $historyRoot) {
                 Remove-Item -LiteralPath $historyRoot -Recurse -Force
             }
+        }
+
+        $annotatedTags = @(& git for-each-ref refs/tags --format="%(objecttype) %(objectname)") |
+            Where-Object { $_.StartsWith("tag ") } |
+            ForEach-Object { $_.Substring(4) }
+        foreach ($tagObject in $annotatedTags) {
+            $tagMetadata = (& git cat-file tag $tagObject) -join "`n"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to inspect tag metadata for $tagObject."
+            }
+            Assert-TextAllowed -Text $tagMetadata -Source "tag $tagObject"
         }
     }
 }

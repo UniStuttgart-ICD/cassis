@@ -338,7 +338,7 @@ namespace Cassis.UI
             if (s.Equals("Running", StringComparison.OrdinalIgnoreCase)) return Success;
             if (s.StartsWith("Start", StringComparison.OrdinalIgnoreCase)) return Warning;
             if (s.StartsWith("Stop", StringComparison.OrdinalIgnoreCase)) return Warning;
-            if (s.Equals("Error", StringComparison.OrdinalIgnoreCase)) return Danger;
+            if (s.StartsWith("Error", StringComparison.OrdinalIgnoreCase)) return Danger;
             return Disabled;
         }
 

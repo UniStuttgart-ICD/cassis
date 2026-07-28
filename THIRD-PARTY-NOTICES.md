@@ -4,6 +4,8 @@ Cassis distributions include the following third-party software.
 
 | Software | Version | Copyright | License |
 |----------|---------|-----------|---------|
+| Microsoft.Bcl.AsyncInterfaces | 10.0.0-preview.4.25258.110 | Microsoft and .NET contributors | MIT |
+| Microsoft.Bcl.Memory | 9.0.14 | Microsoft and .NET contributors | MIT |
 | Microsoft.Extensions.AI.Abstractions | 9.9.1 | Microsoft and .NET contributors | MIT |
 | Microsoft.Extensions.Configuration.Abstractions | 8.0.0 | Microsoft and .NET contributors | MIT |
 | Microsoft.Extensions.DependencyInjection | 8.0.1 | Microsoft and .NET contributors | MIT |
@@ -18,9 +20,19 @@ Cassis distributions include the following third-party software.
 | ModelContextProtocol | 0.3.0-preview.5 | Model Context Protocol contributors | MIT |
 | ModelContextProtocol.Core | 0.3.0-preview.5 | Model Context Protocol contributors | MIT |
 | Newtonsoft.Json | 13.0.4 | James Newton-King | MIT |
+| System.Buffers | 4.6.1 | Microsoft and .NET contributors | MIT |
+| System.Diagnostics.DiagnosticSource | 8.0.1 | Microsoft and .NET contributors | MIT |
 | System.IO.Pipelines | 8.0.0 | Microsoft and .NET contributors | MIT |
+| System.Memory | 4.6.3 | Microsoft and .NET contributors | MIT |
 | System.Net.ServerSentEvents | 10.0.0-preview.4.25258.110 | Microsoft and .NET contributors | MIT |
+| System.Numerics.Vectors | 4.6.1 | Microsoft and .NET contributors | MIT |
+| System.Resources.Extensions | 8.0.0 | Microsoft and .NET contributors | MIT |
+| System.Runtime.CompilerServices.Unsafe | 6.1.2 | Microsoft and .NET contributors | MIT |
+| System.Text.Encodings.Web | 8.0.0 | Microsoft and .NET contributors | MIT |
 | System.Text.Json | 8.0.6 | Microsoft and .NET contributors | MIT |
+| System.Threading.Channels | 8.0.0 | Microsoft and .NET contributors | MIT |
+| System.Threading.Tasks.Extensions | 4.6.3 | Microsoft and .NET contributors | MIT |
+| System.ValueTuple | 4.5.0 | Microsoft and .NET contributors | MIT |
 
 ## MIT License
 

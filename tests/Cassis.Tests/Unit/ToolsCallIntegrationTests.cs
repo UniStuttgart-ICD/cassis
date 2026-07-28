@@ -14,12 +14,21 @@ public class ToolsCallIntegrationTests
 {
     private readonly HttpClient _http = new();
 
-    // No dynamic port allocation required; tests hit external MCP
+    private static string GetEndpoint()
+    {
+        var endpoint = Environment.GetEnvironmentVariable("MCP_URL");
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            Assert.Ignore("Online tests require MCP_URL.");
+        }
+
+        return endpoint!.TrimEnd('/');
+    }
 
     [Test]
     public async Task Tools_Call_Should_Invoke_Core_MCP_Tool()
     {
-        var endpoint = (Environment.GetEnvironmentVariable("MCP_URL") ?? "http://localhost:3003/mcp").TrimEnd('/');
+        var endpoint = GetEndpoint();
         var initialize = new JsonRpcRequest
         {
             Id = new RequestId(1),
@@ -39,17 +48,17 @@ public class ToolsCallIntegrationTests
         }
         catch
         {
-            Assert.Ignore("Online test requires MCP at MCP_URL or http://localhost:3003/mcp.");
+            Assert.Ignore("Online test requires a reachable MCP_URL.");
         }
 
-        // Call tools/call for core MCP functionality - test system health
+        // Call tools/call for core MCP functionality.
         var call = new JsonRpcRequest
         {
             Id = new RequestId(2),
             Method = "tools/call",
             Params = JsonSerializer.SerializeToNode(new
             {
-                name = "getsystemhealth",
+                name = "get_componentcount",
                 arguments = new { }
             })
         };
@@ -67,7 +76,7 @@ public class ToolsCallIntegrationTests
     [Test]
     public async Task Tools_List_Should_Not_Include_Removed_Features()
     {
-        var endpoint = (Environment.GetEnvironmentVariable("MCP_URL") ?? "http://localhost:3003/mcp").TrimEnd('/');
+        var endpoint = GetEndpoint();
         var initialize = new JsonRpcRequest
         {
             Id = new RequestId(1),
@@ -87,7 +96,7 @@ public class ToolsCallIntegrationTests
         }
         catch
         {
-            Assert.Ignore("Online test requires MCP at MCP_URL or http://localhost:3003/mcp.");
+            Assert.Ignore("Online test requires a reachable MCP_URL.");
         }
 
         // List tools to verify removed features are not present
@@ -110,8 +119,7 @@ public class ToolsCallIntegrationTests
         Assert.That(content.ToLowerInvariant(), Does.Not.Contain("performance"));
 
         // Verify core tools are present (document tools may be optional)
-        Assert.That(content.ToLowerInvariant(), Does.Contain("getsystemhealth"));
-        Assert.That(content.ToLowerInvariant(), Does.Contain("createpoint"));
-        // Document tools not required on all deployments
+        Assert.That(content.ToLowerInvariant(), Does.Contain("get_componentcount"));
+        Assert.That(content.ToLowerInvariant(), Does.Contain("addcomponent"));
     }
 }

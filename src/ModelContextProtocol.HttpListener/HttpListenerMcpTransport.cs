@@ -49,6 +49,11 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>Raised whenever a JSON‑RPC message is received.</summary>
     public event Action<JsonRpcMessage>? MessageReceived;
 
+    /// <summary>
+    /// Completes when the listener loop stops and faults when it stops unexpectedly.
+    /// </summary>
+    public Task Completion => _listenTask ?? Task.CompletedTask;
+
     public HttpListenerMcpTransport(
         string prefix,
         McpServerOptions options,
@@ -318,17 +323,26 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 context = await _listener.GetContextAsync().WaitAsync(token);
 #endif
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested || _stopping)
             {
+                WriteDebugLog("[MCP HTTP] Listener stopped because cancellation was requested.");
                 break;
             }
-            catch (HttpListenerException)
+            catch (HttpListenerException ex) when (token.IsCancellationRequested || _stopping)
             {
+                WriteDebugLog($"[MCP HTTP] Listener stopped during shutdown: {ex}");
                 break;
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex) when (token.IsCancellationRequested || _stopping || _disposed)
             {
+                WriteDebugLog($"[MCP HTTP] Listener disposed during shutdown: {ex}");
                 break;
+            }
+            catch (Exception ex)
+            {
+                WriteDebugLog($"[MCP ERROR] Listener stopped unexpectedly: {ex}");
+                _logger?.LogError(ex, "MCP listener stopped unexpectedly");
+                throw new InvalidOperationException("The MCP listener stopped unexpectedly.", ex);
             }
 
             if (!_requestSlots.Wait(0))
@@ -350,6 +364,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 }
                 catch (Exception ex)
                 {
+                    WriteDebugLog($"[MCP ERROR] Unhandled MCP request error: {ex}");
                     _logger?.LogError(ex, "Unhandled MCP request error");
                     try
                     {
@@ -489,6 +504,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
+            WriteDebugLog($"[MCP WARN] SSE stream error for session {sessionId}: {ex}");
             _logger?.LogWarning("SSE stream error for session {SessionId}: {Message}", sessionId, ex.Message);
         }
         finally
@@ -655,6 +671,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
+            WriteDebugLog($"[MCP ERROR] POST response stream error for session {responseSessionId}: {ex}");
             _logger?.LogWarning("POST SSE stream error for session {SessionId}: {Message}", responseSessionId, ex.Message);
         }
         finally
@@ -792,12 +809,12 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
+            WriteDebugLog($"[MCP ERROR] MCP message processing failed: {ex}");
 
             // Send error response if it was a request
             if (message is JsonRpcRequest request)
             {
                 var errorResponse = CreateErrorResponse(request.Id, -32603, "Internal error", ex.Message);
-                MessageReceived?.Invoke(message);
                 return await TrySendToSessionAsync(errorResponse, sessionId).ConfigureAwait(false);
             }
 
@@ -820,6 +837,8 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// </summary>
     private async Task<JsonRpcResponse> HandleInitializeRequest(JsonRpcRequest request)
     {
+        var serverInfo = _options.ServerInfo
+            ?? throw new InvalidOperationException("MCP server information is not configured.");
 
         var response = new JsonRpcResponse
         {
@@ -828,7 +847,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             {
                 protocolVersion = "2025-06-18",
                 capabilities = new { tools = new { }, prompts = new { } },
-                serverInfo = new { name = "Cassis", version = "1.3.0" }
+                serverInfo
             })
         };
 
@@ -1310,7 +1329,17 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
 
         if (_listenTask is not null)
-            await _listenTask.ConfigureAwait(false);
+        {
+            try
+            {
+                await _listenTask.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                WriteDebugLog($"[MCP ERROR] Listener task was already faulted when stopping: {ex}");
+                _logger?.LogError(ex, "Listener task was already faulted when stopping");
+            }
+        }
 
         lock (_lock)
         {
