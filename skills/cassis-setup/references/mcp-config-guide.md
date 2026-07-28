@@ -114,6 +114,6 @@ Any MCP-compatible client can connect using:
 - **Transport**: HTTP (Streamable HTTP)
 - **URL**: `http://localhost:3003/mcp/`
 - **Protocol version**: `2025-06-18`
-- **Authentication**: none; Cassis trusts processes on the local Windows machine
+- **Authentication**: none; Cassis trusts processes on the local machine
 
-Do not run Cassis on a shared or untrusted Windows machine or session. Connected clients can edit Grasshopper documents and scripts with Rhino's privileges.
+Do not run Cassis on a shared or untrusted machine or session. Connected clients can edit Grasshopper documents and scripts with Rhino's privileges.

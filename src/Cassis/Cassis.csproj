@@ -7,7 +7,9 @@
         Rhino 8 Windows: net48, net8.0, net8.0-windows, net8.0-windows10.0.22000.0, etc
         Rhino 8 Mac: net8.0, net8.0-macos, net8.0-macos12.0, etc
     -->
-    <TargetFrameworks>net8.0-windows;net8.0;net48</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net8.0-windows;net8.0;net48</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('macos'))">net8.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(TargetFrameworks)' == ''">net8.0</TargetFrameworks>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <TargetExt>.gha</TargetExt>
     <NoWarn>NU1701;NETSDK1086</NoWarn>
@@ -34,7 +36,7 @@
 
     <PropertyGroup>
         <!-- Specifies information for Assembly and Yak -->
-        <Version>1.3.2</Version>
+        <Version>1.3.3</Version>
         <Title>Cassis</Title>
         <Company></Company>
         <Description>MCP server plugin for Grasshopper (Rhino 8) that lets AI assistants read and edit Grasshopper definitions</Description>
@@ -47,6 +49,8 @@
         <YakPlatform Condition="'$(YakPlatform)' == '' and $([MSBuild]::IsOSPlatform('windows'))">win</YakPlatform>
         <YakPlatform Condition="'$(YakPlatform)' == '' and $([MSBuild]::IsOSPlatform('macos'))">mac</YakPlatform>
         <YakPlatform Condition="'$(YakPlatform)' == ''">any</YakPlatform>
+        <YakTargetFramework Condition="'$(YakPlatform)' == 'win'">net8.0-windows</YakTargetFramework>
+        <YakTargetFramework Condition="'$(YakPlatform)' == 'mac'">net8.0</YakTargetFramework>
         <YakPackageOutputPath Condition="'$(YakPackageOutputPath)' == ''">$([MSBuild]::NormalizeDirectory('$(ArtifactsDir)', 'yak', '$(Configuration)'))</YakPackageOutputPath>
         <YakPackageStagePath>$([MSBuild]::NormalizeDirectory('$(YakPackageOutputPath)', 'stage'))</YakPackageStagePath>
     </PropertyGroup>
@@ -165,31 +169,25 @@
           Condition="'$(BuildYakPackage)' == 'True'">
     <Error Text="Yak executable not found. Set YakExecutable to a valid Yak CLI path."
            Condition="'$(YakExecutable)' == '' Or !Exists('$(YakExecutable)')" />
-    <Error Text="Missing net48 plugin output."
-           Condition="!Exists('$(OutputPath)net48\$(AssemblyName)$(TargetExt)')" />
-    <Error Text="Missing net8.0 plugin output."
-           Condition="!Exists('$(OutputPath)net8.0\$(AssemblyName)$(TargetExt)')" />
-    <Error Text="Missing net8.0-windows plugin output."
-           Condition="!Exists('$(OutputPath)net8.0-windows\$(AssemblyName)$(TargetExt)')" />
+    <Error Text="YakPlatform must be 'win' or 'mac'."
+           Condition="'$(YakTargetFramework)' == ''" />
+    <Error Text="Missing $(YakTargetFramework) plugin output."
+           Condition="!Exists('$(OutputPath)$(YakTargetFramework)\$(AssemblyName)$(TargetExt)')" />
 
     <ItemGroup>
-      <YakNet48Files Include="$(OutputPath)net48\$(AssemblyName)$(TargetExt);$(OutputPath)net48\*.dll" />
-      <YakNet80Files Include="$(OutputPath)net8.0\$(AssemblyName)$(TargetExt);$(OutputPath)net8.0\*.dll" />
-      <YakNet80WindowsFiles Include="$(OutputPath)net8.0-windows\$(AssemblyName)$(TargetExt);$(OutputPath)net8.0-windows\*.dll" />
-      <YakPackagesToDelete Include="$(YakPackageOutputPath)*.yak" />
+      <YakFrameworkFiles Include="$(OutputPath)$(YakTargetFramework)\$(AssemblyName)$(TargetExt);$(OutputPath)$(YakTargetFramework)\*.dll" />
+      <YakPackagesToDelete Include="$(YakPackageOutputPath)cassis-$(Version)-*-$(YakPlatform).yak" />
     </ItemGroup>
 
     <RemoveDir Directories="$(YakPackageStagePath)" />
-    <MakeDir Directories="$(YakPackageOutputPath);$(YakPackageStagePath);$(YakPackageStagePath)logo;$(YakPackageStagePath)net48;$(YakPackageStagePath)net8.0;$(YakPackageStagePath)net8.0-windows" />
+    <MakeDir Directories="$(YakPackageOutputPath);$(YakPackageStagePath);$(YakPackageStagePath)logo;$(YakPackageStagePath)$(YakTargetFramework)" />
     <Delete Files="@(YakPackagesToDelete)" />
 
     <Copy SourceFiles="$(RepoRoot)manifest.yml;$(RepoRoot)LICENSE;$(RepoRoot)THIRD-PARTY-NOTICES.md"
           DestinationFolder="$(YakPackageStagePath)" />
     <Copy SourceFiles="$(RepoRoot)logo\cassis_logo.png"
           DestinationFolder="$(YakPackageStagePath)logo" />
-    <Copy SourceFiles="@(YakNet48Files)" DestinationFolder="$(YakPackageStagePath)net48" />
-    <Copy SourceFiles="@(YakNet80Files)" DestinationFolder="$(YakPackageStagePath)net8.0" />
-    <Copy SourceFiles="@(YakNet80WindowsFiles)" DestinationFolder="$(YakPackageStagePath)net8.0-windows" />
+    <Copy SourceFiles="@(YakFrameworkFiles)" DestinationFolder="$(YakPackageStagePath)$(YakTargetFramework)" />
 
     <Exec Command="&quot;$(YakExecutable)&quot; build --platform $(YakPlatform) --version $(Version)"
           WorkingDirectory="$(YakPackageStagePath)" />

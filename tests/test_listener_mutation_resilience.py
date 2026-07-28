@@ -249,7 +249,7 @@ def run(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:3003/mcp/")
-    parser.add_argument("--expected-version", default="1.3.2")
+    parser.add_argument("--expected-version", default="1.3.3")
     parser.add_argument("--cycles", type=int, default=5, help="Five cycles produce 140 sequential mutations.")
     parser.add_argument("--delay", type=float, default=0.25)
     run(parser.parse_args())

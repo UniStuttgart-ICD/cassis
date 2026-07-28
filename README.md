@@ -29,9 +29,17 @@ Once both sides are connected, your AI assistant can read, create, and modify Gr
 
 ## Installation
 
-The current release supports Rhino 8 on Windows.
+The current release supports Rhino 8 on Windows and macOS.
 
-### From release (recommended)
+### Package Manager (recommended)
+
+1. Run `_PackageManager` in Rhino
+2. Search for **Cassis**
+3. Install the latest version and restart Rhino
+
+Yak selects the `net8.0-windows` build on Windows and the `net8.0` build on macOS.
+
+### From release on Windows
 
 1. Download `Cassis.zip` from the [latest release](https://github.com/UniStuttgart-ICD/cassis/releases/latest)
 2. If you are updating, move the existing `%APPDATA%\Grasshopper\Libraries\Cassis\` folder out of `Libraries`
@@ -45,17 +53,28 @@ The release zip includes `Cassis.gha`, the DLL files the plugin needs, the proje
 ```bash
 git clone https://github.com/UniStuttgart-ICD/cassis.git
 cd cassis
+```
+
+Windows:
+
+```powershell
 dotnet build -f net8.0-windows src/Cassis/Cassis.csproj
 ```
 
-The build deploys `Cassis.gha` to `%APPDATA%\Grasshopper\Libraries\Cassis\` automatically.
+macOS:
+
+```bash
+dotnet build -f net8.0 src/Cassis/Cassis.csproj
+```
+
+The build deploys `Cassis.gha` to the platform's Grasshopper plug-in folder automatically.
 
 ## Usage
 
 1. Open Grasshopper and place the **Cassis** component on the canvas
 2. The MCP server starts at `http://localhost:3003/mcp/`
 
-Cassis accepts connections only from the local machine and has no application-level authentication. Use it only on a trusted Windows machine and session.
+Cassis accepts connections only from the local machine and has no application-level authentication. Use it only on a trusted machine and session.
 3. Connect your AI client (Claude, etc.) to that URL
 
 Right-click the component to choose which tools are exposed. A practical default set is enabled on startup.
@@ -134,7 +153,8 @@ pwsh ./scripts/New-ReleasePackage.ps1 -NoBuild
 ```
 
 When Rhino 8's Yak CLI is installed, a build also creates
-`artifacts/yak/Release/cassis-<version>-rh8_0-win.yak`. Set
+`artifacts/yak/Release/cassis-<version>-rh8_0-<platform>.yak`. Windows packages
+contain `net8.0-windows`; macOS packages contain `net8.0`. Set
 `YakExecutable` and `BuildYakPackage=True` as MSBuild properties on build
 machines where Yak is installed elsewhere.
 
@@ -165,7 +185,7 @@ public static class MyTools
 
 | Problem | Fix |
 |---------|-----|
-| Plugin not loading | Check that `%APPDATA%\Grasshopper\Libraries\Cassis\` exists and contains `Cassis.gha` plus the DLL files from `Cassis.zip`. Do not copy only the `.gha` file. Restart Rhino after copying the folder. |
+| Plugin not loading | Reinstall Cassis through `_PackageManager` and restart Rhino. For a manual Windows install, ensure the complete `Cassis` folder is present under `%APPDATA%\Grasshopper\Libraries\`. |
 | MCP server not starting | Check port 3003 isn't in use |
 | Component creation fails | Ensure Grasshopper has an active document |
 | Script errors | Use `get_csharp_script_errors` / `get_python_script_errors` |

@@ -10,10 +10,21 @@
 ```bash
 git clone https://github.com/UniStuttgart-ICD/cassis.git
 cd cassis
+```
+
+Windows:
+
+```powershell
 dotnet build -f net8.0-windows src/Cassis/Cassis.csproj
 ```
 
-The built plugin deploys to `%APPDATA%\Grasshopper\Libraries`.
+macOS:
+
+```bash
+dotnet build -f net8.0 src/Cassis/Cassis.csproj
+```
+
+The built plugin deploys to the platform's Grasshopper plug-in folder.
 
 ## Project Structure
 
@@ -47,8 +58,9 @@ The Grasshopper test project requires a local Rhino 8 installation:
 dotnet test tests/Cassis.Tests/Cassis.Tests.csproj -f net48
 ```
 
-Release builds create a Yak package under `artifacts/yak/Release/` when the
-Rhino 8 Yak CLI is available. Override its path with
+Release builds create a platform-specific Yak package under
+`artifacts/yak/Release/` when the Rhino 8 Yak CLI is available. Windows uses
+`net8.0-windows`; macOS uses `net8.0`. Override the Yak path with
 `-p:YakExecutable=<path> -p:BuildYakPackage=True`.
 
 ## Pull Request Process
