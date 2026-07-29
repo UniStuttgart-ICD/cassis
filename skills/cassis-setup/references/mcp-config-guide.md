@@ -45,6 +45,8 @@ Docs: https://code.claude.com/docs/en/mcp
 
 ## VS Code (GitHub Copilot)
 
+[Install Cassis in VS Code](vscode:mcp/install?%7B%22name%22%3A%22cassis%22%2C%22type%22%3A%22http%22%2C%22url%22%3A%22http%3A%2F%2Flocalhost%3A3003%2Fmcp%2F%22%7D)
+
 Create or edit `.vscode/mcp.json` in the workspace root:
 ```json
 {

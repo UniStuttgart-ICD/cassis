@@ -36,6 +36,7 @@ The current release supports Rhino 8 on Windows and macOS.
 1. Run `_PackageManager` in Rhino
 2. Search for **Cassis**
 3. Install the latest version and restart Rhino
+4. Follow the [AI client setup guide](docs/agent-setup.md)
 
 Yak selects the `net8.0-windows` build on Windows and the `net8.0` build on macOS.
 
@@ -72,10 +73,12 @@ The build deploys `Cassis.gha` to the platform's Grasshopper plug-in folder auto
 ## Usage
 
 1. Open Grasshopper and place the **Cassis** component on the canvas
-2. The MCP server starts at `http://localhost:3003/mcp/`
+2. Click **Start Server**
+3. Connect your AI client to `http://localhost:3003/mcp/` using the
+   [AI client setup guide](docs/agent-setup.md)
 
-Cassis accepts connections only from the local machine and has no application-level authentication. Use it only on a trusted machine and session.
-3. Connect your AI client (Claude, etc.) to that URL
+Cassis accepts connections only from the local machine and has no application-level
+authentication. Use it only on a trusted machine and session.
 
 Right-click the component to choose which tools are exposed. A practical default set is enabled on startup.
 
@@ -94,20 +97,23 @@ Configure Cassis as an HTTP MCP server. For example, in VS Code:
 }
 ```
 
-Config formats vary by client. See the [MCP configuration guide](skills/cassis-setup/references/mcp-config-guide.md) for other tools.
+Config formats vary by client. See the [AI client setup guide](docs/agent-setup.md)
+for copy-ready instructions.
 
 ## Agent Setup
 
-You can let your AI coding assistant handle the setup. Copy this prompt into your AI tool:
+You can let your AI coding assistant handle the setup. Copy this prompt into your AI
+tool:
 
-> Read and follow the installation skill at `skills/cassis-setup/SKILL.md`
+> Cassis is already installed through Rhino Package Manager. Read and follow
+> https://raw.githubusercontent.com/UniStuttgart-ICD/cassis/main/skills/cassis-setup/SKILL.md
 
 The skill is auto-discoverable from these standard paths:
 - `.github/skills/cassis-setup/` (VS Code Copilot)
 - `.claude/skills/cassis-setup/` (Claude Code)
 - `.agents/skills/cassis-setup/` (Agent Skills standard)
 
-Or use the [MCP configuration guide](skills/cassis-setup/references/mcp-config-guide.md) for framework-specific config locations.
+Or use the [AI client setup guide](docs/agent-setup.md) for manual setup.
 
 ## Tools
 

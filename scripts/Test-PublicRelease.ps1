@@ -306,6 +306,9 @@ if ($YakArchive) {
         $requiredFiles = @(
             "manifest.yml",
             "logo\cassis_logo.png",
+            "docs\agent-setup.md",
+            "skills\cassis-setup\SKILL.md",
+            "skills\cassis-setup\references\mcp-config-guide.md",
             "LICENSE",
             "THIRD-PARTY-NOTICES.md",
             "$expectedFramework\Cassis.gha",

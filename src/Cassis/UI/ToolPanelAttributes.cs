@@ -57,7 +57,10 @@ public class ToolPanelAttributes : ServerAttributes
             owner.GetUptimeShort,
             owner.GetMessageCountString,
             owner.GetLastMsgShort,
-            owner.GetLastToolShort)
+            owner.GetLastToolShort,
+            owner.ShouldShowAgentSetup,
+            owner.OpenAgentSetup,
+            owner.CopyMcpUrl)
     {
         _categoryNames = ToolCategories.Categories.Keys.ToArray();
         _categoryTools = ToolCategories.Categories.Values.ToArray();

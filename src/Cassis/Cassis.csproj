@@ -36,7 +36,7 @@
 
     <PropertyGroup>
         <!-- Specifies information for Assembly and Yak -->
-        <Version>1.3.3</Version>
+        <Version>1.3.4</Version>
         <Title>Cassis</Title>
         <Company></Company>
         <Description>MCP server plugin for Grasshopper (Rhino 8) that lets AI assistants read and edit Grasshopper definitions</Description>
@@ -180,13 +180,19 @@
     </ItemGroup>
 
     <RemoveDir Directories="$(YakPackageStagePath)" />
-    <MakeDir Directories="$(YakPackageOutputPath);$(YakPackageStagePath);$(YakPackageStagePath)logo;$(YakPackageStagePath)$(YakTargetFramework)" />
+    <MakeDir Directories="$(YakPackageOutputPath);$(YakPackageStagePath);$(YakPackageStagePath)logo;$(YakPackageStagePath)docs;$(YakPackageStagePath)skills\cassis-setup\references;$(YakPackageStagePath)$(YakTargetFramework)" />
     <Delete Files="@(YakPackagesToDelete)" />
 
     <Copy SourceFiles="$(RepoRoot)manifest.yml;$(RepoRoot)LICENSE;$(RepoRoot)THIRD-PARTY-NOTICES.md"
           DestinationFolder="$(YakPackageStagePath)" />
     <Copy SourceFiles="$(RepoRoot)logo\cassis_logo.png"
           DestinationFolder="$(YakPackageStagePath)logo" />
+    <Copy SourceFiles="$(RepoRoot)docs\agent-setup.md"
+          DestinationFolder="$(YakPackageStagePath)docs" />
+    <Copy SourceFiles="$(RepoRoot)skills\cassis-setup\SKILL.md"
+          DestinationFolder="$(YakPackageStagePath)skills\cassis-setup" />
+    <Copy SourceFiles="$(RepoRoot)skills\cassis-setup\references\mcp-config-guide.md"
+          DestinationFolder="$(YakPackageStagePath)skills\cassis-setup\references" />
     <Copy SourceFiles="@(YakFrameworkFiles)" DestinationFolder="$(YakPackageStagePath)$(YakTargetFramework)" />
 
     <Exec Command="&quot;$(YakExecutable)&quot; build --platform $(YakPlatform) --version $(Version)"
