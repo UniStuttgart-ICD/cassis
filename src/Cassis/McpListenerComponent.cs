@@ -34,6 +34,9 @@ namespace Cassis
     /// </summary>
     public class McpListenerComponent : GH_Component
     {
+        public const string McpEndpoint = "http://localhost:3003/mcp/";
+        public const string AgentSetupUrl = "https://github.com/UniStuttgart-ICD/cassis/blob/main/docs/agent-setup.md";
+
         // === (same fields as original component) ===
         private CassisHost? _server;
         private CancellationTokenSource? _cts;
@@ -45,6 +48,7 @@ namespace Cassis
         private DateTime? _lastConnectionTime;
         private int _totalMessagesReceived;
         private int _totalConnections;
+        private bool _clientInitialized;
 
         private string _currentStatus = "Stopped";
         private readonly object _statusLock = new object();
@@ -139,7 +143,7 @@ namespace Cassis
         // === I/O ===
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
-            p.AddTextParameter("Prefix", "P", "HTTP prefix", GH_ParamAccess.item, "http://localhost:3003/mcp/");
+            p.AddTextParameter("Prefix", "P", "HTTP prefix", GH_ParamAccess.item, McpEndpoint);
         }
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
@@ -476,8 +480,14 @@ namespace Cassis
             var refreshListenerUi = false;
             string? toolNameFromRequest = null;
             var looksLikeToolResponse = false;
+            var clientInitialized = msg is JsonRpcNotification notification &&
+                                    notification.Method == "notifications/initialized";
 
-            if (msg is JsonRpcRequest req && req.Method == "tools/call")
+            if (clientInitialized)
+            {
+                refreshListenerUi = true;
+            }
+            else if (msg is JsonRpcRequest req && req.Method == "tools/call")
             {
                 refreshListenerUi = true;
                 try
@@ -521,6 +531,7 @@ namespace Cassis
             {
                 _lastMessageTime = ts;
                 _totalMessagesReceived++;
+                _clientInitialized |= clientInitialized;
 
                 if (toolNameFromRequest != null)
                 {
@@ -664,6 +675,41 @@ namespace Cassis
             }
         }
 
+        public bool ShouldShowAgentSetup()
+        {
+            lock (_statusLock) return ShouldShowAgentSetup(_clientInitialized);
+        }
+
+        internal static bool ShouldShowAgentSetup(bool clientInitialized)
+        {
+            return !clientInitialized;
+        }
+
+        public void CopyMcpUrl()
+        {
+            try
+            {
+                Eto.Forms.Clipboard.Instance.Text = McpEndpoint;
+                RhinoApp.WriteLine($"[Cassis] Copied MCP URL: {McpEndpoint}");
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"[Cassis WARN] Could not copy the MCP URL: {ex.Message}");
+            }
+        }
+
+        public void OpenAgentSetup()
+        {
+            try
+            {
+                RhinoApp.RunScript($"_-OpenURL \"{AgentSetupUrl}\"", false);
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"[Cassis WARN] Could not open agent setup: {ex.Message}");
+            }
+        }
+
         public void HandleButtonClick()
         {
             try
@@ -787,6 +833,10 @@ namespace Cassis
         protected override void AppendAdditionalComponentMenuItems(System.Windows.Forms.ToolStripDropDown menu)
         {
             base.AppendAdditionalComponentMenuItems(menu);
+            GH_DocumentObject.Menu_AppendSeparator(menu);
+            GH_DocumentObject.Menu_AppendItem(menu, "Open Agent Setup", (s, e) => OpenAgentSetup());
+            GH_DocumentObject.Menu_AppendItem(menu, "Copy MCP URL", (s, e) => CopyMcpUrl());
+            GH_DocumentObject.Menu_AppendSeparator(menu);
             foreach (var kvp in ToolCategories.Categories)
             {
                 var category = kvp.Key;

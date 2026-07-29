@@ -1,23 +1,23 @@
 <!-- Canonical source: skills/cassis-setup/SKILL.md -->
 ---
 name: cassis-setup
-description: Install the Cassis MCP plugin for Grasshopper (Rhino 8) on Windows or macOS and configure the MCP connection in your AI coding tool. Use when user says "install cassis", "set up cassis", "configure cassis MCP", or "set up grasshopper AI". Supports Codex, Claude Code, VS Code Copilot, Cursor, OpenCode, and Windsurf.
+description: Install or connect the Cassis MCP plugin for Grasshopper (Rhino 8) on Windows or macOS and configure the MCP connection in an AI coding tool. Use when user says "install cassis", "set up cassis", "configure cassis MCP", or "set up grasshopper AI". Supports Codex, Claude Code, VS Code Copilot, Cursor, OpenCode, and Windsurf.
 ---
 
 # Cassis Setup
 
 Guides the user through installing the Cassis Grasshopper plugin and connecting it to their AI coding tool via MCP.
 
-## Prerequisites
+## Step 1: Check the Grasshopper installation
 
-- Rhino 8 installed
-- Internet access to Rhino's Package Manager
+Confirm that Rhino 8 is installed on Windows or macOS. Other platforms are not
+supported.
 
-## Step 1: Detect OS
+If the user says Cassis is already installed through Rhino Package Manager, or the
+**Cassis** component is available in Grasshopper, do not reinstall it. Continue to
+Step 2.
 
-Confirm that the operating system is Windows or macOS. Other platforms are not supported.
-
-## Step 2: Install the plugin
+Otherwise, ask the user to:
 
 1. Start Rhino
 2. Run `_PackageManager`
@@ -27,7 +27,7 @@ Confirm that the operating system is Windows or macOS. Other platforms are not s
 
 Yak installs `net8.0-windows` on Windows and `net8.0` on macOS.
 
-## Step 3: Detect AI framework
+## Step 2: Detect AI framework
 
 Determine which AI tool the user is running. Check in order:
 
@@ -40,7 +40,7 @@ Determine which AI tool the user is running. Check in order:
 
 If detection is ambiguous, ask the user which tool they are using.
 
-## Step 4: Configure MCP
+## Step 3: Configure MCP
 
 Consult [the MCP configuration guide](../../../skills/cassis-setup/references/mcp-config-guide.md) for the exact config format and file location for the detected framework.
 
@@ -55,7 +55,10 @@ Cassis must be configured as an HTTP or Streamable HTTP MCP server, not stdio.
 
 Frameworks name this transport differently (`http`, `url`, or `serverUrl`). The endpoint is always `http://localhost:3003/mcp/`.
 
-## Step 5: Verify installation
+Before changing a client configuration, show the user the planned file, scope, and
+change, then get permission. Preserve existing servers and settings.
+
+## Step 4: Verify installation
 
 Tell the user to:
 1. Restart Rhino (if it was open)

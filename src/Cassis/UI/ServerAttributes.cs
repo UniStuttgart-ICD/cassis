@@ -33,6 +33,9 @@ namespace Cassis.UI
         private readonly Func<string> _getMessages;      // "0"
         private readonly Func<string> _getLastMsg;       // "—" or short text/time
         private readonly Func<string> _getLastTool;      // "—" or short text/time
+        private readonly Func<bool> _showAgentSetup;
+        private readonly Action _onOpenAgentSetup;
+        private readonly Action _onCopyMcpUrl;
         public ServerAttributes(
             GH_Component owner,
             Func<string> getButtonText,
@@ -41,7 +44,10 @@ namespace Cassis.UI
             Func<string> getUptime,
             Func<string> getMessages,
             Func<string> getLastMsg,
-            Func<string> getLastTool) : base(owner)
+            Func<string> getLastTool,
+            Func<bool> showAgentSetup,
+            Action onOpenAgentSetup,
+            Action onCopyMcpUrl) : base(owner)
         {
             _getButtonText = getButtonText;
             _onButtonClick = onButtonClick;
@@ -50,17 +56,32 @@ namespace Cassis.UI
             _getMessages = getMessages;
             _getLastMsg = getLastMsg;
             _getLastTool = getLastTool;
+            _showAgentSetup = showAgentSetup;
+            _onOpenAgentSetup = onOpenAgentSetup;
+            _onCopyMcpUrl = onCopyMcpUrl;
         }
 
         // Layout rects
         private RectangleF _panel;
         private RectangleF _header;
         private RectangleF _body;
+        private RectangleF _setup;
         private RectangleF _footer;
         private RectangleF _buttonRect;
+        private RectangleF _openSetupRect;
+        private RectangleF _copyUrlRect;
 
         private bool _mouseOver;
         private bool _mouseDown;
+        private SetupAction _hoveredSetupAction;
+        private SetupAction _pressedSetupAction;
+
+        private enum SetupAction
+        {
+            None,
+            OpenGuide,
+            CopyUrl
+        }
 
         // Tokens (dark theme) - refined for better contrast
         static readonly int R = 6;
@@ -86,8 +107,9 @@ namespace Cassis.UI
             float width = Math.Max(baseWidth, 240f);
             float headerH = 54f;
             float bodyH = 4 * 26f + 16f; // 3 rows + extra line for last tool call
+            float setupH = _showAgentSetup() ? 64f : 0f;
             float footerH = 52f;
-            float totalH = headerH + HeaderGap + bodyH + footerH;
+            float totalH = headerH + HeaderGap + bodyH + setupH + footerH;
 
             // Center the capsule content when widening the component.
             float dx = width - baseWidth;
@@ -96,7 +118,12 @@ namespace Cassis.UI
             _panel = new RectangleF(newX, Bounds.Bottom + 6, width, totalH);
             _header = new RectangleF(_panel.X, _panel.Y, _panel.Width, headerH);
             _body   = new RectangleF(_panel.X, _header.Bottom + HeaderGap, _panel.Width, bodyH);
-            _footer = new RectangleF(_panel.X, _body.Bottom, _panel.Width, footerH);
+            _setup  = new RectangleF(_panel.X, _body.Bottom, _panel.Width, setupH);
+            _footer = new RectangleF(_panel.X, _setup.Bottom, _panel.Width, footerH);
+
+            float setupButtonWidth = (_setup.Width - (PAD * 2) - 8) / 2f;
+            _openSetupRect = new RectangleF(_setup.X + PAD, _setup.Y + 30, setupButtonWidth, 24);
+            _copyUrlRect = new RectangleF(_openSetupRect.Right + 8, _setup.Y + 30, setupButtonWidth, 24);
 
             _buttonRect = new RectangleF(
                 _footer.X + PAD,
@@ -165,10 +192,39 @@ namespace Cassis.UI
             DrawMetricRow(g, bodyFont, "Last msg", _getLastMsg(), ref y);
             DrawMetricRowValueBelow(g, bodyFont, "Last tool call", _getLastTool(), ref y);
 
+            if (_showAgentSetup())
+            {
+                DrawSeparator(g, _setup.Top);
+                DrawAgentSetup(g, bodyFont);
+            }
+
             DrawSeparator(g, _footer.Top);
 
             // Primary button
             DrawPrimaryButton(g, buttonFont, _buttonRect, _getButtonText());
+        }
+
+        private void DrawAgentSetup(Graphics g, Font bodyFont)
+        {
+            var labelRect = new RectangleF(_setup.X + PAD, _setup.Y + 5, _setup.Width - PAD * 2, 20);
+            g.DrawString("Connect your AI client to Cassis", bodyFont, new SolidBrush(Warning), labelRect, GH_TextRenderingConstants.NearCenter);
+            DrawSecondaryButton(g, bodyFont, _openSetupRect, "Open Agent Setup", _hoveredSetupAction == SetupAction.OpenGuide);
+            DrawSecondaryButton(g, bodyFont, _copyUrlRect, "Copy MCP URL", _hoveredSetupAction == SetupAction.CopyUrl);
+        }
+
+        private static void DrawSecondaryButton(Graphics g, Font font, RectangleF rect, string text, bool hovered)
+        {
+            var border = hovered ? Warning : Muted;
+            using (var path = RoundedRect(rect, 6))
+            {
+                using (var fill = new SolidBrush(hovered ? Color.FromArgb(42, Warning) : PanelFill))
+                {
+                    g.FillPath(fill, path);
+                }
+                g.DrawPath(new Pen(border, 1), path);
+            }
+
+            g.DrawString(text, font, new SolidBrush(Text), rect, GH_TextRenderingConstants.CenterCenter);
         }
 
         private void DrawHeader(Graphics g, Font titleFont, Font uptimeFont)
@@ -252,6 +308,20 @@ namespace Cassis.UI
         // Interaction
         public override GH_ObjectResponse RespondToMouseMove(GH_Canvas sender, GH_CanvasMouseEvent e)
         {
+            SetupAction setupAction = GetSetupAction(e.CanvasLocation);
+            if (setupAction != SetupAction.None)
+            {
+                _mouseOver = false;
+                _hoveredSetupAction = setupAction;
+                Owner.OnDisplayExpired(false);
+                sender.Cursor = System.Windows.Forms.Cursors.Hand;
+                return GH_ObjectResponse.Capture;
+            }
+            if (_hoveredSetupAction != SetupAction.None)
+            {
+                _hoveredSetupAction = SetupAction.None;
+                Owner.OnDisplayExpired(false);
+            }
             if (_buttonRect.Contains(e.CanvasLocation))
             {
                 _mouseOver = true;
@@ -271,6 +341,12 @@ namespace Cassis.UI
 
         public override GH_ObjectResponse RespondToMouseDown(GH_Canvas sender, GH_CanvasMouseEvent e)
         {
+            SetupAction setupAction = GetSetupAction(e.CanvasLocation);
+            if (e.Button == System.Windows.Forms.MouseButtons.Left && setupAction != SetupAction.None)
+            {
+                _pressedSetupAction = setupAction;
+                return GH_ObjectResponse.Capture;
+            }
             if (e.Button == System.Windows.Forms.MouseButtons.Left && _buttonRect.Contains(e.CanvasLocation))
             {
                 _mouseDown = true;
@@ -282,6 +358,32 @@ namespace Cassis.UI
 
         public override GH_ObjectResponse RespondToMouseUp(GH_Canvas sender, GH_CanvasMouseEvent e)
         {
+            SetupAction setupAction = GetSetupAction(e.CanvasLocation);
+            if (e.Button == System.Windows.Forms.MouseButtons.Left && setupAction != SetupAction.None)
+            {
+                SetupAction pressedAction = _pressedSetupAction;
+                _pressedSetupAction = SetupAction.None;
+                if (pressedAction == setupAction)
+                {
+                    try
+                    {
+                        if (setupAction == SetupAction.OpenGuide) _onOpenAgentSetup();
+                        else _onCopyMcpUrl();
+                    }
+                    catch (Exception ex)
+                    {
+                        Rhino.RhinoApp.WriteLine($"[Cassis WARN] Setup action failed: {ex.Message}");
+                    }
+                }
+                return GH_ObjectResponse.Release;
+            }
+            if (e.Button == System.Windows.Forms.MouseButtons.Left && _pressedSetupAction != SetupAction.None)
+            {
+                _pressedSetupAction = SetupAction.None;
+                _hoveredSetupAction = SetupAction.None;
+                Owner.OnDisplayExpired(false);
+                return GH_ObjectResponse.Release;
+            }
             if (e.Button == System.Windows.Forms.MouseButtons.Left && _buttonRect.Contains(e.CanvasLocation))
             {
                 bool wasDown = _mouseDown;
@@ -302,6 +404,14 @@ namespace Cassis.UI
                 return GH_ObjectResponse.Handled;
             }
             return base.RespondToMouseUp(sender, e);
+        }
+
+        private SetupAction GetSetupAction(PointF location)
+        {
+            if (!_showAgentSetup()) return SetupAction.None;
+            if (_openSetupRect.Contains(location)) return SetupAction.OpenGuide;
+            if (_copyUrlRect.Contains(location)) return SetupAction.CopyUrl;
+            return SetupAction.None;
         }
 
         private void ShowContextMenu(GH_Canvas sender, GH_CanvasMouseEvent e)
