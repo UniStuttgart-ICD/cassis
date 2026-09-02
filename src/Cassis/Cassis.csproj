@@ -61,8 +61,7 @@
         <PackageReference Include="ModelContextProtocol.Core" />
         <PackageReference Include="RhinoCommon" />
         <PackageReference Include="Newtonsoft.Json" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
-        <PackageReference Include="Microsoft.Extensions.Logging" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Microsoft.Bcl.Memory" Condition="$(TargetFramework) == 'net48'" />
         <PackageReference Include="System.Resources.Extensions" />
         <PackageReference Include="System.Text.Json" GeneratePathProperty="true" />

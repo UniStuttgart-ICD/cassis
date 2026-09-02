@@ -34,7 +34,11 @@ public static class ComponentTools
         [Description("X coordinate position on the canvas")]
         double x,
         [Description("Y coordinate position on the canvas")]
-        double y)
+        double y,
+        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        float padding = CanvasPlacement.DefaultPadding,
+        [Description("When true, nudge away from overlapping components (default true)")]
+        bool avoidOverlap = true)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -42,10 +46,11 @@ public static class ComponentTools
                 (nameof(componentService), componentService),
                 (nameof(type), type));
 
-            McpExtensions.ValidateRange(nameof(x), x, -10000, 10000);
-            McpExtensions.ValidateRange(nameof(y), y, -10000, 10000);
+            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            padding = CanvasPlacement.ValidatePadding(padding);
 
-            var result = await componentService.AddComponentAsync(type, x, y);
+            var result = await componentService.AddComponentAsync(type, x, y, padding, avoidOverlap);
 
             return new CallToolResult
             {
@@ -185,15 +190,20 @@ public static class ComponentTools
         [Description("X coordinate position on the canvas (optional; default 100)")]
         double x = 100,
         [Description("Y coordinate position on the canvas (optional; default 100)")]
-        double y = 100)
+        double y = 100,
+        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        float padding = CanvasPlacement.DefaultPadding,
+        [Description("When true, nudge away from overlapping components (default true)")]
+        bool avoidOverlap = true)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
             McpExtensions.ValidateRequired(
                 (nameof(componentService), componentService));
 
-            McpExtensions.ValidateRange(nameof(x), x, -10000, 10000);
-            McpExtensions.ValidateRange(nameof(y), y, -10000, 10000);
+            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            padding = CanvasPlacement.ValidatePadding(padding);
 
             var candidateNames = new[]
             {
@@ -210,7 +220,7 @@ public static class ComponentTools
             // If script is provided, use the specialized method that creates the component with script content
             if (!string.IsNullOrWhiteSpace(script))
             {
-                success = await componentService.AddPythonScriptComponentAsync(script, x, y);
+                success = await componentService.AddPythonScriptComponentAsync(script, x, y, padding, avoidOverlap);
                 if (success.Success)
                 {
                     // Component created successfully with script content
@@ -222,7 +232,7 @@ public static class ComponentTools
                 // Fallback to trying different component names for empty script components
                 foreach (var name in candidateNames)
                 {
-                    var attempt = await componentService.AddComponentAsync(name, x, y);
+                    var attempt = await componentService.AddComponentAsync(name, x, y, padding, avoidOverlap);
                     if (attempt.Success)
                     {
                         success = attempt;
@@ -262,15 +272,20 @@ public static class ComponentTools
         [Description("X coordinate position on the canvas (optional; default 100)")]
         double x = 100,
         [Description("Y coordinate position on the canvas (optional; default 100)")]
-        double y = 100)
+        double y = 100,
+        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        float padding = CanvasPlacement.DefaultPadding,
+        [Description("When true, nudge away from overlapping components (default true)")]
+        bool avoidOverlap = true)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
             McpExtensions.ValidateRequired(
                 (nameof(componentService), componentService));
 
-            McpExtensions.ValidateRange(nameof(x), x, -10000, 10000);
-            McpExtensions.ValidateRange(nameof(y), y, -10000, 10000);
+            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            padding = CanvasPlacement.ValidatePadding(padding);
 
             var candidateNames = new[]
             {
@@ -287,7 +302,7 @@ public static class ComponentTools
             // If script is provided, use the specialized method that creates the component with script content
             if (!string.IsNullOrWhiteSpace(script))
             {
-                success = await componentService.AddCSharpScriptComponentAsync(script, x, y);
+                success = await componentService.AddCSharpScriptComponentAsync(script, x, y, padding, avoidOverlap);
                 if (success.Success)
                 {
                     // Component created successfully with script content
@@ -299,7 +314,7 @@ public static class ComponentTools
                 // Fallback to trying different component names for empty script components
                 foreach (var name in candidateNames)
                 {
-                    var attempt = await componentService.AddComponentAsync(name, x, y);
+                    var attempt = await componentService.AddComponentAsync(name, x, y, padding, avoidOverlap);
                     if (attempt.Success)
                     {
                         success = attempt;

@@ -23,11 +23,18 @@ public static class ComponentTransformTools
     public static async Task<CallToolResult> MoveComponent(
         [Description("Component GUID to move")] string componentInstanceGuid,
         [Description("Relative X offset in canvas units")] double x,
-        [Description("Relative Y offset in canvas units")] double y)
+        [Description("Relative Y offset in canvas units")] double y,
+        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        float padding = CanvasPlacement.DefaultPadding,
+        [Description("When true, nudge away from overlapping components after the move (default true)")]
+        bool avoidOverlap = true)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
             McpExtensions.ValidateRequired((nameof(componentInstanceGuid), componentInstanceGuid));
+            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            padding = CanvasPlacement.ValidatePadding(padding);
 
             var result = await UiThreadHelper.InvokeAsync(() =>
             {
@@ -45,10 +52,9 @@ public static class ComponentTransformTools
                 }
 
                 var current = obj.Attributes.Pivot;
-                var updated = new PointF(current.X + (float)x, current.Y + (float)y);
+                var requested = new PointF(current.X + (float)x, current.Y + (float)y);
 
-                obj.Attributes.Pivot = updated;
-                obj.Attributes.ExpireLayout();
+                var placement = CanvasPlacement.PlaceOnCanvas(document, obj, requested, padding, avoidOverlap);
                 document.NewSolution(false);
 
                 return new
@@ -56,7 +62,11 @@ public static class ComponentTransformTools
                     success = true,
                     componentId = componentInstanceGuid,
                     delta = new { x, y },
-                    newPosition = new { x = updated.X, y = updated.Y }
+                    requested = new { x = requested.X, y = requested.Y },
+                    newPosition = new { x = placement.NewPivot.X, y = placement.NewPivot.Y },
+                    nudged = placement.Nudged,
+                    nudgeReason = placement.NudgeReason,
+                    outOfCanvasBounds = placement.OutOfCanvasBounds,
                 };
             });
 

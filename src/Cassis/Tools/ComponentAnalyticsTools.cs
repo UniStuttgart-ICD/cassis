@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Drawing;
 using System.Linq;
 using System.Threading.Tasks;
 using Grasshopper;
@@ -66,19 +67,32 @@ public static class ComponentAnalyticsTools
             {
                 var document = Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
-                return document.Objects.Select(obj => new
+                return document.Objects.Select(obj =>
                 {
-                    id = obj.InstanceGuid,
-                    name = obj.Name ?? string.Empty,
-                    nickName = obj.NickName ?? string.Empty,
-                    category = (obj as IGH_Component)?.Category ?? "N/A",
-                    subCategory = (obj as IGH_Component)?.SubCategory ?? "N/A",
-                    typeName = obj.GetType().FullName ?? string.Empty,
-                    position = new Position
+                    var bounds = obj.Attributes?.Bounds ?? RectangleF.Empty;
+                    return new
                     {
-                        X = obj.Attributes?.Pivot.X ?? 0f,
-                        Y = obj.Attributes?.Pivot.Y ?? 0f
-                    }
+                        id = obj.InstanceGuid,
+                        name = obj.Name ?? string.Empty,
+                        nickName = obj.NickName ?? string.Empty,
+                        category = (obj as IGH_Component)?.Category ?? "N/A",
+                        subCategory = (obj as IGH_Component)?.SubCategory ?? "N/A",
+                        typeName = obj.GetType().FullName ?? string.Empty,
+                        position = new Position
+                        {
+                            X = obj.Attributes?.Pivot.X ?? 0f,
+                            Y = obj.Attributes?.Pivot.Y ?? 0f
+                        },
+                        bounds = bounds.Width > 0f && bounds.Height > 0f
+                            ? new CanvasBounds
+                            {
+                                X = bounds.X,
+                                Y = bounds.Y,
+                                W = bounds.Width,
+                                H = bounds.Height
+                            }
+                            : null
+                    };
                 }).ToList();
             });
 

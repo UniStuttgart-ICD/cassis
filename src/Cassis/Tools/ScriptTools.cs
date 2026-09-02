@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Drawing;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -782,11 +783,19 @@ public static class ScriptTools
         IGrasshopperComponentService componentService,
         [Description("X coordinate on the canvas")] double x = 100,
         [Description("Y coordinate on the canvas")] double y = 100,
-        [Description("Optional C# script source. Default result output is lowercase 'a'; call Get_CSharp_Script_Errors after setting.")] string? script = null)
+        [Description("Optional C# script source. Default result output is lowercase 'a'; call Get_CSharp_Script_Errors after setting.")] string? script = null,
+        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        float padding = CanvasPlacement.DefaultPadding,
+        [Description("When true, nudge away from overlapping components (default true)")]
+        bool avoidOverlap = true)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
-            string newId = await UiThreadHelper.InvokeAsync(() =>
+            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            padding = CanvasPlacement.ValidatePadding(padding);
+
+            var placementResult = await UiThreadHelper.InvokeAsync(() =>
             {
                 var doc = Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
@@ -803,10 +812,12 @@ public static class ScriptTools
                         if (component == null) continue;
 
                         component.CreateAttributes();
-                        component.Attributes.Pivot = new System.Drawing.PointF((float)x, (float)y);
                         doc.AddObject(component, false);
+
+                        var requested = new PointF((float)x, (float)y);
+                        var placement = CanvasPlacement.PlaceOnCanvas(doc, component, requested, padding, avoidOverlap);
                         doc.NewSolution(false);
-                        return component.InstanceGuid.ToString();
+                        return (component.InstanceGuid.ToString(), placement);
                     }
                     catch (Exception)
                     {
@@ -817,10 +828,21 @@ public static class ScriptTools
                 throw new InvalidOperationException($"Unable to create a C# Script component. Tried: C# Script, CSharp, C#, GhCSharp, Script");
             });
 
+            var (newId, placement) = placementResult;
+
             if (!string.IsNullOrWhiteSpace(script))
                 await componentService.SetComponentScriptAsync(newId, "csharp", script);
 
-            return new { success = true, id = newId, x, y };
+            return new
+            {
+                success = true,
+                id = newId,
+                requested = new { x = placement.RequestedPivot.X, y = placement.RequestedPivot.Y },
+                newPosition = new { x = placement.NewPivot.X, y = placement.NewPivot.Y },
+                nudged = placement.Nudged,
+                nudgeReason = placement.NudgeReason,
+                outOfCanvasBounds = placement.OutOfCanvasBounds,
+            };
         }, nameof(AddCSharpScriptComponent));
     }
 

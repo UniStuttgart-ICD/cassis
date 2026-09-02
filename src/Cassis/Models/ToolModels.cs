@@ -17,6 +17,24 @@ public sealed class Position
 }
 
 /// <summary>
+/// Axis-aligned canvas bounds for a Grasshopper object.
+/// </summary>
+public sealed class CanvasBounds
+{
+    [JsonPropertyName("x")]
+    public float X { get; set; }
+
+    [JsonPropertyName("y")]
+    public float Y { get; set; }
+
+    [JsonPropertyName("w")]
+    public float W { get; set; }
+
+    [JsonPropertyName("h")]
+    public float H { get; set; }
+}
+
+/// <summary>
 /// Result payload for returning script source code.
 /// </summary>
 public sealed class ScriptResult

@@ -12,7 +12,12 @@ public record ComponentCreationResult(
     string? Name,
     float X,
     float Y,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    float? RequestedX = null,
+    float? RequestedY = null,
+    bool Nudged = false,
+    string? NudgeReason = null,
+    bool OutOfCanvasBounds = false);
 
 /// <summary>
 /// Result of component value setting operation.

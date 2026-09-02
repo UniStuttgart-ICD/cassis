@@ -2,9 +2,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Cassis.Services;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.HttpListener;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -13,14 +12,13 @@ namespace Cassis;
 
 /// <summary>
 /// Hosts an MCP server for Grasshopper using <see cref="HttpListenerMcpTransport"/>.
-/// This MVP implementation uses simplified service architecture without caching, 
+/// This MVP implementation uses simplified service architecture without caching,
 /// feature flags, or performance monitoring.
 /// </summary>
 public sealed class CassisHost : IAsyncDisposable, IDisposable
 {
-    private readonly ServiceProvider _services;
     private readonly HttpListenerMcpTransport _transport;
-    private readonly ILogger<CassisHost>? _logger;
+    private readonly ILogger<CassisHost> _logger;
 
     /// <summary>
     /// Initializes the host for the specified <paramref name="prefix"/>.
@@ -38,80 +36,58 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
         }
 
         var logPath = Path.Combine(Path.GetTempPath(), "cassis_debug.log");
-        
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating services...");
-        var services = new ServiceCollection();
 
-        services.AddLogging(builder =>
+        // ponytail: skip Microsoft.Extensions.DI — Speckle already loaded Abstractions 2.2
+        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating services...");
+        var uiService = new GrasshopperUIService(NullLogger<GrasshopperUIService>.Instance);
+        var documentService = new GrasshopperDocumentService(NullLogger<GrasshopperDocumentService>.Instance);
+        var componentService = new GrasshopperComponentService(NullLogger<GrasshopperComponentService>.Instance);
+        var healthChecks = new Diagnostics.IHealthCheck[]
         {
-            builder.SetMinimumLevel(LogLevel.Debug);
+            new Diagnostics.GrasshopperConnectionHealthCheck(
+                uiService, NullLogger<Diagnostics.GrasshopperConnectionHealthCheck>.Instance),
+            new Diagnostics.MemoryHealthCheck(),
+        };
+
+        IServiceProvider services = new StaticServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IGrasshopperUIService)] = uiService,
+            [typeof(IGrasshopperDocumentService)] = documentService,
+            [typeof(IGrasshopperComponentService)] = componentService,
+            [typeof(IEnumerable<Diagnostics.IHealthCheck>)] = healthChecks,
         });
 
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Adding Grasshopper services...");
-        // Add core Grasshopper services (simplified MVP architecture - direct implementations only)
-        services.AddSingleton<IGrasshopperUIService, GrasshopperUIService>();
-        services.AddSingleton<IGrasshopperDocumentService, GrasshopperDocumentService>();
-        services.AddSingleton<IGrasshopperComponentService, GrasshopperComponentService>();
-
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Adding health checks...");
-        // Add essential health checks only (MVP scope - connection and memory monitoring)
-        services.AddSingleton<Diagnostics.IHealthCheck, Diagnostics.GrasshopperConnectionHealthCheck>();
-        services.AddSingleton<Diagnostics.IHealthCheck, Diagnostics.MemoryHealthCheck>();
-        services.AddSingleton<Diagnostics.GrasshopperHealthChecks>();
+        _logger = NullLogger<CassisHost>.Instance;
 
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Configuring MCP server...");
         var enabledSet = enabledTools == null
             ? null
             : new HashSet<string>(enabledTools, StringComparer.OrdinalIgnoreCase);
-        var toolTypes = ToolSelection.GetEnabledToolTypes(enabledSet).ToArray();
 
-        // allowedToolNames is passed to the transport to filter tools/list and tools/call.
-        // All tools (Cassis and external) are subject to the same per-tool filtering.
         HashSet<string>? allowedToolNames = enabledSet == null
             ? null
             : new HashSet<string>(enabledSet.Select(n => n.ToLowerInvariant()), StringComparer.OrdinalIgnoreCase);
 
-        services.AddMcpServer()
-            .WithTools(toolTypes)
-            .WithPromptsFromAssembly();
-
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Building service provider...");
-        _services = services.BuildServiceProvider();
-        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Service provider built.");
-        try
+        var assemblyVersion = typeof(CassisHost).Assembly.GetName().Version
+            ?? throw new InvalidOperationException("Cassis assembly version is unavailable.");
+        var options = new McpServerOptions
         {
-            _logger = _services.GetService<ILogger<CassisHost>>();
-
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Getting options...");
-            var options = _services.GetRequiredService<IOptions<McpServerOptions>>().Value;
-            var assemblyVersion = typeof(CassisHost).Assembly.GetName().Version
-                ?? throw new InvalidOperationException("Cassis assembly version is unavailable.");
-            options.ServerInfo = new Implementation
+            ServerInfo = new Implementation
             {
                 Name = "Cassis",
                 Title = "Cassis",
                 Version = assemblyVersion.ToString(3),
-            };
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Options resolved.");
+            },
+        };
 
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Resolving logger factory...");
-            var loggerFactory = _services.GetService<ILoggerFactory>();
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Logger factory resolved.");
+        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating transport...");
+        _transport = new HttpListenerMcpTransport(
+            prefix, options, NullLoggerFactory.Instance, services, logPath, allowedToolNames);
+        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Transport created.");
 
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating transport...");
-            _transport = new HttpListenerMcpTransport(prefix, options, loggerFactory, _services, logPath, allowedToolNames);
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Transport created.");
-
-            Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Completed successfully!");
-            _logger?.LogInformation("CassisHost initialized with endpoint: {Prefix}", prefix);
-            _logger?.LogInformation("Debug log file: {LogPath}", logPath);
-        }
-        catch (Exception ex)
-        {
-            Rhino.RhinoApp.WriteLine($"[MCP ERROR] CassisHost initialization failed: {ex}");
-            _services.Dispose();
-            throw;
-        }
+        Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Completed successfully!");
+        _logger.LogInformation("CassisHost initialized with endpoint: {Prefix}", prefix);
+        _logger.LogInformation("Debug log file: {LogPath}", logPath);
     }
 
     /// <summary>Occurs when an MCP message is received.</summary>
@@ -120,12 +96,12 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
         add
         {
             _transport.MessageReceived += value;
-            _logger?.LogDebug("MessageReceived event handler added");
+            _logger.LogDebug("MessageReceived event handler added");
         }
         remove
         {
             _transport.MessageReceived -= value;
-            _logger?.LogDebug("MessageReceived event handler removed");
+            _logger.LogDebug("MessageReceived event handler removed");
         }
     }
 
@@ -135,31 +111,45 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
     /// <summary>Starts listening for requests.</summary>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        _logger?.LogInformation("Starting MCP transport...");
+        _logger.LogInformation("Starting MCP transport...");
         await _transport.StartAsync(cancellationToken);
-        _logger?.LogInformation("MCP transport started successfully");
+        _logger.LogInformation("MCP transport started successfully");
     }
 
     /// <summary>Stops listening for requests.</summary>
     public async Task StopAsync()
     {
-        _logger?.LogInformation("Stopping MCP transport...");
+        _logger.LogInformation("Stopping MCP transport...");
         await _transport.StopAsync();
-        _logger?.LogInformation("MCP transport stopped");
+        _logger.LogInformation("MCP transport stopped");
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        _logger?.LogDebug("Disposing CassisHost...");
+        _logger.LogDebug("Disposing CassisHost...");
         await _transport.DisposeAsync();
-        await _services.DisposeAsync();
-        _logger?.LogDebug("CassisHost disposed");
+        _logger.LogDebug("CassisHost disposed");
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
         DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private sealed class StaticServiceProvider : IServiceProvider
+    {
+        private readonly Dictionary<Type, object> _map;
+
+        public StaticServiceProvider(Dictionary<Type, object> map)
+        {
+            _map = map;
+        }
+
+        public object? GetService(Type serviceType)
+        {
+            return _map.TryGetValue(serviceType, out var service) ? service : null;
+        }
     }
 }

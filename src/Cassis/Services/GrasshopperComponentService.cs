@@ -11,6 +11,7 @@ using Grasshopper.Kernel.Special;
 using Microsoft.Extensions.Logging;
 using Cassis.Models;
 using Cassis.Extensions;
+using Cassis.Utilities;
 using Rhino;
 
 namespace Cassis.Services;
@@ -31,12 +32,17 @@ public class GrasshopperComponentService : IGrasshopperComponentService
     #region Component Creation
 
     public async Task<ComponentCreationResult> AddComponentAsync(string type, double x, double y,
+        float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(type))
         {
             return CreateErrorResult("Component type cannot be null or empty");
         }
+
+        padding = CanvasPlacement.ValidatePadding(padding);
+        McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+        McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
 
         _logger.LogInformation("Adding component: type={Type}, x={X}, y={Y}", type, x, y);
 
@@ -49,7 +55,7 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                     return CreateErrorResult($"Could not create component of type '{type}'");
                 }
 
-                AddComponentToDocument(doc, component, x, y);
+                var placement = AddComponentToDocument(doc, component, x, y, padding, avoidOverlap);
 
                 // Verify component was added
                 var addedComponent = doc.Objects.FirstOrDefault(obj => obj.InstanceGuid == component.InstanceGuid);
@@ -66,20 +72,23 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                 _logger.LogInformation("Successfully added component {ComponentId} of type {Type}",
                     component.InstanceGuid, component.GetType().Name);
 
-                return CreateSuccessResult(component);
+                return CreateSuccessResult(component, placement, (float)x, (float)y);
             },
             error => CreateErrorResult(error));
     }
 
-    public async Task<ComponentCreationResult> AddPythonScriptComponentAsync(string script, double x, double y, CancellationToken cancellationToken = default)
+    public async Task<ComponentCreationResult> AddPythonScriptComponentAsync(string script, double x, double y,
+        float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(script))
         {
             return CreateErrorResult("Script content cannot be null or empty");
         }
 
-        McpExtensions.ValidateRange(nameof(x), x, -10000, 10000);
-        McpExtensions.ValidateRange(nameof(y), y, -10000, 10000);
+        padding = CanvasPlacement.ValidatePadding(padding);
+        McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+        McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
 
         return await InvokeOnUiThreadWithDocumentAsync(
             doc =>
@@ -90,25 +99,28 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                     return CreateErrorResult("Unable to create Python script component");
                 }
 
-                AddComponentToDocument(doc, component, x, y);
+                var placement = AddComponentToDocument(doc, component, x, y, padding, avoidOverlap);
 
                 _logger.LogInformation("Successfully added Python script component {ComponentId} with script content",
                     component.InstanceGuid);
 
-                return CreateSuccessResult(component);
+                return CreateSuccessResult(component, placement, (float)x, (float)y);
             },
             error => CreateErrorResult(error));
     }
 
-    public async Task<ComponentCreationResult> AddCSharpScriptComponentAsync(string script, double x, double y, CancellationToken cancellationToken = default)
+    public async Task<ComponentCreationResult> AddCSharpScriptComponentAsync(string script, double x, double y,
+        float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(script))
         {
             return CreateErrorResult("Script content cannot be null or empty");
         }
 
-        McpExtensions.ValidateRange(nameof(x), x, -10000, 10000);
-        McpExtensions.ValidateRange(nameof(y), y, -10000, 10000);
+        padding = CanvasPlacement.ValidatePadding(padding);
+        McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+        McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
 
         return await InvokeOnUiThreadWithDocumentAsync(
             doc =>
@@ -119,12 +131,12 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                     return CreateErrorResult("Unable to create C# script component");
                 }
 
-                AddComponentToDocument(doc, component, x, y);
+                var placement = AddComponentToDocument(doc, component, x, y, padding, avoidOverlap);
 
                 _logger.LogInformation("Successfully added C# script component {ComponentId} with script content",
                     component.InstanceGuid);
 
-                return CreateSuccessResult(component);
+                return CreateSuccessResult(component, placement, (float)x, (float)y);
             },
             error => CreateErrorResult(error));
     }
@@ -2643,14 +2655,21 @@ public class GrasshopperComponentService : IGrasshopperComponentService
     /// <summary>
     /// Adds a component to the document at the specified position and refreshes the solution.
     /// </summary>
-    private static void AddComponentToDocument(GH_Document doc, IGH_DocumentObject component, double x, double y)
+    private static PlacementResult AddComponentToDocument(
+        GH_Document doc,
+        IGH_DocumentObject component,
+        double x,
+        double y,
+        float padding,
+        bool avoidOverlap)
     {
         if (component.Attributes == null)
         {
             component.CreateAttributes();
         }
 
-        component.Attributes!.Pivot = new PointF((float)x, (float)y);
+        var requested = new PointF((float)x, (float)y);
+        component.Attributes!.Pivot = requested;
 
         if (component is IGH_Component ghComponent)
         {
@@ -2661,21 +2680,33 @@ public class GrasshopperComponentService : IGrasshopperComponentService
             doc.AddObject(component, false);
         }
 
+        var placement = CanvasPlacement.PlaceOnCanvas(doc, component, requested, padding, avoidOverlap);
         doc.NewSolution(false);
+        return placement;
     }
 
     /// <summary>
     /// Creates a ComponentCreationResult from a component.
     /// </summary>
-    private static ComponentCreationResult CreateSuccessResult(IGH_DocumentObject component)
+    private static ComponentCreationResult CreateSuccessResult(
+        IGH_DocumentObject component,
+        PlacementResult placement,
+        float requestedX,
+        float requestedY)
     {
         return new ComponentCreationResult(
             true,
             component.InstanceGuid.ToString(),
             component.GetType().Name,
             component.NickName,
-            component.Attributes?.Pivot.X ?? 0,
-            component.Attributes?.Pivot.Y ?? 0);
+            placement.NewPivot.X,
+            placement.NewPivot.Y,
+            null,
+            requestedX,
+            requestedY,
+            placement.Nudged,
+            placement.NudgeReason,
+            placement.OutOfCanvasBounds);
     }
 
     /// <summary>

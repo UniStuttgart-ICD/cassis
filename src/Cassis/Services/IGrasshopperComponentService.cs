@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Cassis.Models;
+using Cassis.Utilities;
 
 namespace Cassis.Services;
 
@@ -15,6 +16,7 @@ public interface IGrasshopperComponentService
     /// Adds a component to the Grasshopper canvas.
     /// </summary>
     Task<ComponentCreationResult> AddComponentAsync(string type, double x, double y,
+        float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -49,12 +51,14 @@ public interface IGrasshopperComponentService
     /// Adds a Python script component to the Grasshopper canvas with the specified script content.
     /// </summary>
     Task<ComponentCreationResult> AddPythonScriptComponentAsync(string script, double x, double y,
+        float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Adds a C# script component to the Grasshopper canvas with the specified script content.
     /// </summary>
     Task<ComponentCreationResult> AddCSharpScriptComponentAsync(string script, double x, double y,
+        float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
