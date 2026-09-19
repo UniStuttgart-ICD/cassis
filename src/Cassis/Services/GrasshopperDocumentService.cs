@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using GH_IO.Serialization;
 using Grasshopper;
 using Grasshopper.Kernel;
 using Microsoft.Extensions.Logging;
@@ -335,8 +336,7 @@ public class GrasshopperDocumentService : IGrasshopperDocumentService
                     return;
                 }
 
-                var editor = Instances.DocumentEditor;
-                if (editor == null)
+                if (Instances.DocumentEditor == null || Instances.ActiveCanvas == null)
                 {
                     tcs.SetResult(new DocumentLoadResult(
                         false,
@@ -346,24 +346,80 @@ public class GrasshopperDocumentService : IGrasshopperDocumentService
                     return;
                 }
 
-                var ok = editor.ScriptAccess_OpenDocument(filePath);
-                if (!ok)
+                var server = Instances.DocumentServer;
+                if (server == null)
                 {
                     tcs.SetResult(new DocumentLoadResult(
                         false,
-                        "Failed to open document",
+                        "Grasshopper document server is not available.",
                         filePath,
-                        "ScriptAccess_OpenDocument returned false"));
+                        "no document server"));
                     return;
                 }
 
-                var doc = Instances.ActiveCanvas?.Document;
-                var name = doc?.DisplayName ?? Path.GetFileName(filePath);
-                var count = doc?.ObjectCount ?? 0;
-                tcs.SetResult(new DocumentLoadResult(
-                    true,
-                    $"Opened '{name}' ({count} objects)",
-                    doc?.FilePath ?? filePath));
+                // ScriptAccess_OpenDocument / GH_DocumentIO.Open call ShowMessages() for
+                // archive warnings/errors ("IO generated N messages…"). Load via GH_Archive
+                // instead, and keep TryDownloadMissingPlugins off to skip Unrecognized Objects.
+                var oldTryDownload = CentralSettings.TryDownloadMissingPlugins;
+                try
+                {
+                    CentralSettings.TryDownloadMissingPlugins = false;
+
+                    var existingIndex = server.IndexOf(filePath);
+                    GH_Document doc;
+                    if (existingIndex >= 0)
+                    {
+                        doc = server[existingIndex];
+                    }
+                    else
+                    {
+                        doc = new GH_Document();
+                        var archive = new GH_Archive();
+                        if (!archive.ReadFromFile(filePath))
+                        {
+                            tcs.SetResult(new DocumentLoadResult(
+                                false,
+                                "Failed to read document",
+                                filePath,
+                                "GH_Archive.ReadFromFile returned false"));
+                            return;
+                        }
+
+                        // Discard IO messages so we never prompt to view them.
+                        archive.ClearMessages();
+
+                        if (!archive.ExtractObject(doc, "Definition"))
+                        {
+                            tcs.SetResult(new DocumentLoadResult(
+                                false,
+                                "Failed to deserialize document",
+                                filePath,
+                                "GH_Archive.ExtractObject returned false"));
+                            return;
+                        }
+
+                        archive.ClearMessages();
+                        doc.DestroyProxySources();
+                        doc.FilePath = filePath;
+                        server.AddDocument(doc);
+                    }
+
+                    doc.Enabled = true;
+                    Instances.ActiveCanvas.Document = doc;
+                    doc.IsModified = false;
+                    // Silent: no solution exception dialogs / completion UI.
+                    doc.NewSolution(true, GH_SolutionMode.Silent);
+
+                    var name = doc.DisplayName ?? Path.GetFileName(filePath);
+                    tcs.SetResult(new DocumentLoadResult(
+                        true,
+                        $"Opened '{name}' ({doc.ObjectCount} objects)",
+                        doc.FilePath ?? filePath));
+                }
+                finally
+                {
+                    CentralSettings.TryDownloadMissingPlugins = oldTryDownload;
+                }
             }
             catch (Exception ex)
             {
