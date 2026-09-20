@@ -5,24 +5,24 @@ using Grasshopper.Kernel;
 namespace Cassis.Utilities;
 
 /// <summary>
-/// Minimal active-vs-Cassis-host snapshot for MCP responses.
+/// Minimal active-vs-Cassis-component snapshot for MCP responses.
 /// </summary>
 internal static class DocumentContextHelper
 {
     /// <summary>One-line targeting rule for tool descriptions (not repeated in every payload).</summary>
     public const string TargetingNote =
-        "Tools edit the active canvas doc; Cassis MCP dies only if its host .gh is closed.";
+        "Tools edit the active canvas doc; MCP runs with Grasshopper and does not require a Cassis component.";
 
     /// <summary>
     /// Compact context. Omits the targeting note (lives in tool descriptions).
-    /// Only includes tip when active ≠ Cassis host.
+    /// Only includes tip when active ≠ a doc that has a Cassis component.
     /// </summary>
     public static object BuildContext()
     {
         var active = Instances.ActiveCanvas?.Document;
-        string? hostFile = null;
-        var hostCount = 0;
-        var onHost = false;
+        string? panelFile = null;
+        var panelCount = 0;
+        var onPanel = false;
 
         var server = Instances.DocumentServer;
         if (server != null)
@@ -34,36 +34,32 @@ internal static class DocumentContextHelper
                     continue;
                 }
 
-                hostCount++;
+                panelCount++;
                 var file = DocLabel(doc);
                 if (ReferenceEquals(doc, active))
                 {
-                    onHost = true;
-                    hostFile = file;
+                    onPanel = true;
+                    panelFile = file;
                 }
                 else
                 {
-                    hostFile ??= file;
+                    panelFile ??= file;
                 }
             }
         }
 
-        // Only emit tip when it matters (saves tokens on the common case).
         string? tip = null;
-        if (hostCount > 0 && !onHost)
+        if (panelCount > 0 && !onPanel)
         {
-            tip = "active≠cassis-host";
-        }
-        else if (hostCount == 0)
-        {
-            tip = "no-cassis-host";
+            tip = "active≠cassis-panel";
         }
 
+        // Keep host/onHost keys for existing clients; value is an optional Cassis UI panel doc.
         return new
         {
             active = DocLabel(active),
-            host = hostFile,
-            onHost,
+            host = panelFile,
+            onHost = onPanel,
             tip
         };
     }

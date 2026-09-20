@@ -75,7 +75,7 @@ public static class DocumentTools
     }
 
     [McpServerTool(Name = "CloseDocument")]
-    [Description("Close active doc (discards unsaved unless saveFirst). Closing Cassis host stops MCP.")]
+    [Description("Close active doc (discards unsaved unless saveFirst). MCP keeps running.")]
     public static async Task<CallToolResult> CloseDocument(
         IGrasshopperDocumentService documentService,
         [Description("Save before close")] bool saveFirst = false)
@@ -84,7 +84,6 @@ public static class DocumentTools
         {
             McpExtensions.ValidateRequired((nameof(documentService), documentService));
 
-            var closingHost = await UiThreadHelper.InvokeAsync(DocumentContextHelper.ActiveDocumentHostsCassis);
             var result = await documentService.CloseDocumentAsync(saveFirst);
             if (!result.Success)
             {
@@ -92,14 +91,12 @@ public static class DocumentTools
             }
 
             var ctx = await UiThreadHelper.InvokeAsync(DocumentContextHelper.BuildContext);
-            return closingHost
-                ? (object)new { ok = true, file = Path.GetFileName(result.Path), killedCassis = true, ctx }
-                : new { ok = true, file = Path.GetFileName(result.Path), ctx };
+            return new { ok = true, file = Path.GetFileName(result.Path), ctx };
         }, nameof(CloseDocument));
     }
 
     [McpServerTool(Name = "NewDocument")]
-    [Description("New empty active doc. Cassis keeps running if its host .gh stays open.")]
+    [Description("New empty active doc. MCP keeps running.")]
     public static async Task<CallToolResult> NewDocument(IGrasshopperDocumentService documentService)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
@@ -118,7 +115,7 @@ public static class DocumentTools
 
     [McpServerTool(Name = "GetDocumentInfo")]
     [Description(
-        "Active doc summary + Cassis host. No component list (use Canvas_Snapshot). " +
+        "Active doc summary + optional Cassis panel doc. No component list (use Canvas_Snapshot). " +
         DocumentContextHelper.TargetingNote)]
     public static async Task<CallToolResult> GetDocumentInfo()
     {

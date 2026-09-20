@@ -6,16 +6,40 @@ Your AI client must also be connected to Cassis.
 ## Start Cassis
 
 1. Restart Rhino after installing or updating Cassis.
-2. Open Grasshopper and place the **Cassis** component on the canvas.
-3. Click **Start Server**.
-4. Configure your AI client with:
+2. Open Grasshopper. MCP **auto-starts** on load (all tools enabled) at
+   `http://localhost:3003/mcp/`.
+3. Configure your AI client with:
 
    - Transport: Streamable HTTP
    - URL: `http://localhost:3003/mcp/`
    - Authentication: none
 
-The server is available only while Rhino, Grasshopper, and the Cassis component are
-running.
+The server is available while Rhino and Grasshopper are running. You do **not**
+need a Cassis component on the canvas for MCP to listen.
+
+### Optional: control panel and opt-out
+
+Place the **Cassis** component for Start/Stop UI and tool toggles. Right-click it
+and uncheck **Auto-start MCP when Grasshopper loads** to opt out (applies the next
+time Grasshopper loads; does not stop a running server). With auto-start off,
+place the component and click **Start Server**.
+
+### Agent launch helper
+
+From a clone of this repo, agents can bring Rhino + Grasshopper up and wait for
+MCP:
+
+```bash
+./scripts/launch-cassis.sh
+```
+
+Windows:
+
+```powershell
+./scripts/launch-cassis.ps1
+```
+
+If MCP is already up, the script exits immediately.
 
 ## Configure your AI client
 
@@ -145,9 +169,9 @@ With the Cassis server running, ask your AI client:
 
 If the client cannot connect, confirm that:
 
-- the Cassis component says **Running**;
+- Grasshopper is open (MCP auto-starts unless Auto-start was disabled);
 - the URL includes the trailing slash: `http://localhost:3003/mcp/`;
-- another Cassis component or process is not already using port `3003`; and
+- another process is not already using port `3003`; and
 - the client has reloaded its MCP configuration.
 
 Cassis accepts connections only from the local machine and has no application-level
