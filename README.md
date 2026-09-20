@@ -72,15 +72,17 @@ The build deploys `Cassis.gha` to the platform's Grasshopper plug-in folder auto
 
 ## Usage
 
-1. Open Grasshopper and place the **Cassis** component on the canvas
-2. Click **Start Server**
-3. Connect your AI client to `http://localhost:3003/mcp/` using the
-   [AI client setup guide](docs/agent-setup.md)
+1. Open Grasshopper — the MCP server **auto-starts** (all tools) at `http://localhost:3003/mcp/`
+2. Connect your AI client using the [AI client setup guide](docs/agent-setup.md)
+
+Optional: place the **Cassis** component for Start/Stop UI and tool toggles.
+Right-click → **Auto-start MCP when Grasshopper loads** to opt out.
+
+From a repo checkout, agents can run `./scripts/launch-cassis.sh` (or
+`launch-cassis.ps1` on Windows) to open Rhino + Grasshopper and wait for MCP.
 
 Cassis accepts connections only from the local machine and has no application-level
 authentication. Use it only on a trusted machine and session.
-
-Right-click the component to choose which tools are exposed. A practical default set is enabled on startup.
 
 ### MCP Client Config
 

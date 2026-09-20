@@ -1,569 +1,134 @@
-using GH_IO.Serialization;
-using Grasshopper.Kernel;
-using Grasshopper.Kernel.Attributes;
-using Grasshopper.GUI;
-using Grasshopper.GUI.Canvas;
-using System.Drawing.Drawing2D;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Threading;
-using System.Threading.Tasks;
-using ModelContextProtocol.Protocol;
-using System.Text.Json;
-using Cassis.Diagnostics;
-using Cassis.Properties;
-using Rhino;
-using System.Net.NetworkInformation;
-using Grasshopper.Kernel.Types;
-using System.Windows.Forms;
-using Cassis.UI;
-using System.IO;
-using System.Reflection;
 using System.Linq;
-#if NET6_0_OR_GREATER
-using System.Runtime.Loader;
-#endif
+using System.Windows.Forms;
+using Cassis.Properties;
+using Cassis.UI;
+using GH_IO.Serialization;
+using Grasshopper.Kernel;
+using Rhino;
 
 namespace Cassis
 {
     /// <summary>
-    /// New /dark UI variant of the MCP listener.
-    /// The original component remains unchanged.
+    /// Canvas UI for the process-wide MCP runtime (start/stop, auto-start toggle, tool selection).
     /// </summary>
     public class McpListenerComponent : GH_Component
     {
-        public const string McpEndpoint = "http://localhost:3003/mcp/";
-        public const string AgentSetupUrl = "https://github.com/UniStuttgart-ICD/cassis/blob/main/docs/agent-setup.md";
+        public const string McpEndpoint = CassisRuntime.McpEndpoint;
+        public const string AgentSetupUrl = CassisRuntime.AgentSetupUrl;
 
-        // === (same fields as original component) ===
-        private CassisHost? _server;
-        private CancellationTokenSource? _cts;
-        private readonly List<string> _logs = new();
-        private readonly ConcurrentQueue<string> _messages = new();
-
-        private DateTime? _serverStartTime;
-        private DateTime? _lastMessageTime;
-        private DateTime? _lastConnectionTime;
-        private int _totalMessagesReceived;
-        private int _totalConnections;
-        private bool _clientInitialized;
-
-        private string _currentStatus = "Stopped";
-        private readonly object _statusLock = new object();
-        private readonly List<string> _connectionLog = new();
-        private DateTime? _lastToolCall;
-        private string _lastToolName = string.Empty;
+        private HashSet<string> _enabledTools = new(ToolCategories.DefaultEnabled);
+        private bool _subscribed;
         private DateTime _lastExpireSolution = DateTime.MinValue;
         private bool _expirePending;
-        private int _transportRestartInProgress;
+        private readonly object _uiLock = new();
 
-        private bool _shouldBeRunning = false;
-        private bool _debugMode = false;
-
-#if NET6_0_OR_GREATER
-        static McpListenerComponent()
-        {
-            // Prefer the plugin-local System.Text.Json to pick up schema types newer than Rhino's runtime carries.
-            try
-            {
-                EnsurePreferredJsonLoaded();
-                AssemblyLoadContext.Default.Resolving += ResolveAssemblyFromPluginDirectory;
-            }
-            catch (Exception ex)
-            {
-                RhinoApp.WriteLine($"[MCP WARN] Failed to register assembly resolver: {ex.Message}");
-            }
-        }
-
-        private static void EnsurePreferredJsonLoaded()
-        {
-            try
-            {
-                var assemblyLocation = Assembly.GetExecutingAssembly().Location;
-                var pluginDirectory = Path.GetDirectoryName(assemblyLocation);
-                if (string.IsNullOrEmpty(pluginDirectory)) return;
-
-                var candidatePath = Path.Combine(pluginDirectory, "System.Text.Json.dll");
-                if (!File.Exists(candidatePath)) return;
-
-                var candidateName = AssemblyName.GetAssemblyName(candidatePath);
-                var alreadyLoaded = AppDomain.CurrentDomain.GetAssemblies()
-                    .FirstOrDefault(a => string.Equals(a.GetName().Name, "System.Text.Json", StringComparison.OrdinalIgnoreCase));
-
-                if (alreadyLoaded != null && alreadyLoaded.GetName().Version >= candidateName.Version) return;
-
-                AssemblyLoadContext.Default.LoadFromAssemblyPath(candidatePath);
-                RhinoApp.WriteLine($"[MCP] Preferring System.Text.Json {candidateName.Version} from plugin folder.");
-            }
-            catch (Exception ex)
-            {
-                RhinoApp.WriteLine($"[MCP WARN] Failed to preload System.Text.Json: {ex.Message}");
-            }
-        }
-
-        private static Assembly? ResolveAssemblyFromPluginDirectory(AssemblyLoadContext context, AssemblyName assemblyName)
-        {
-            try
-            {
-                if (!string.Equals(assemblyName.Name, "System.Text.Json", StringComparison.OrdinalIgnoreCase)) return null;
-
-                var assemblyLocation = Assembly.GetExecutingAssembly().Location;
-                var pluginDirectory = Path.GetDirectoryName(assemblyLocation);
-                if (string.IsNullOrEmpty(pluginDirectory)) return null;
-
-                var candidatePath = Path.Combine(pluginDirectory, "System.Text.Json.dll");
-                if (!File.Exists(candidatePath)) return null;
-
-                var candidateName = AssemblyName.GetAssemblyName(candidatePath);
-                if (candidateName.Version < assemblyName.Version) return null;
-
-                var resolved = context.LoadFromAssemblyPath(candidatePath);
-                RhinoApp.WriteLine($"[MCP] Resolved System.Text.Json {candidateName.Version} from plugin folder.");
-                return resolved;
-            }
-            catch (Exception ex)
-            {
-                RhinoApp.WriteLine($"[MCP WARN] Assembly resolve failed for {assemblyName.FullName}: {ex.Message}");
-                return null;
-            }
-        }
-#endif
-
-        public McpListenerComponent() : base(
-            "Cassis",
-            "Cassis",
-            "Start MCP server",
-            "Cassis",
-            "MCP")
+        public McpListenerComponent()
+            : base(
+                "Cassis",
+                "Cassis",
+                "MCP server control panel (auto-starts with Grasshopper unless disabled)",
+                "Cassis",
+                "MCP")
         {
         }
 
-        // === I/O ===
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
             p.AddTextParameter("Prefix", "P", "HTTP prefix", GH_ParamAccess.item, McpEndpoint);
         }
+
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
             p.AddTextParameter("Messages", "M", "Received JSON-RPC messages", GH_ParamAccess.list);
         }
 
-        // === UI () ===
         public override void CreateAttributes()
         {
-            m_attributes = new Cassis.UI.ToolPanelAttributes(this);
+            m_attributes = new ToolPanelAttributes(this);
+            EnsureSubscribed();
+            SyncToolsFromRuntime();
             ExpireSolution(true);
         }
 
-        // === Solve/Server lifecycle (same behavior as original) ===
-        protected override void SolveInstance(IGH_DataAccess da)
+        public override void AddedToDocument(GH_Document document)
         {
-            try
-            {
-                Message = "";
-
-                string prefix = "";
-                if (!da.GetData(0, ref prefix)) return;
-
-                if (_shouldBeRunning && _server == null)
-                {
-                    try
-                    {
-                        Rhino.RhinoApp.WriteLine("[MCP] Starting server...");
-                        var actualPrefix = GetAvailablePort(prefix);
-                        Rhino.RhinoApp.WriteLine($"[MCP] Prefix: {actualPrefix}");
-
-                        Rhino.RhinoApp.WriteLine("[MCP] Creating CassisHost...");
-                        var server = new CassisHost(actualPrefix, _enabledTools);
-                        Rhino.RhinoApp.WriteLine("[MCP] CassisHost created successfully");
-                        server.MessageReceived += OnMessage;
-                        var cts = new CancellationTokenSource();
-                        _server = server;
-                        _cts = cts;
-
-                        Rhino.RhinoApp.WriteLine("[MCP] Starting Task.Run for StartAsync...");
-                        Task.Run(async () =>
-                        {
-                            try
-                            {
-                                Rhino.RhinoApp.WriteLine("[MCP] Calling StartAsync...");
-                                await server.StartAsync(cts.Token);
-                                Rhino.RhinoApp.WriteLine("[MCP] StartAsync completed successfully!");
-
-                                lock (_statusLock)
-                                {
-                                    if (ReferenceEquals(_server, server))
-                                    {
-                                        _currentStatus = "Running";
-                                        _serverStartTime = DateTime.UtcNow;
-                                    }
-                                }
-
-                                _ = ObserveServerCompletionAsync(server, cts, actualPrefix);
-                                Rhino.RhinoApp.InvokeOnUiThread((Action)(() =>
-                                {
-                                    ExpireSolution(true);
-                                }));
-                            }
-                            catch (Exception ex)
-                            {
-                                var report = McpStartupDiagnostics.WriteReport(ex, "StartAsync", actualPrefix);
-                                Rhino.RhinoApp.WriteLine($"[MCP ERROR] Failed to start server: {ex.Message}");
-                                Rhino.RhinoApp.WriteLine($"[MCP ERROR] {ex.StackTrace}");
-                                Rhino.RhinoApp.WriteLine(
-                                    report.Written
-                                        ? $"[MCP ERROR] Startup report: {report.Detail}"
-                                        : $"[MCP ERROR] Startup report unavailable: {report.Detail}");
-                                var ownsServer = false;
-                                lock (_statusLock)
-                                {
-                                    if (ReferenceEquals(_server, server))
-                                    {
-                                        ownsServer = true;
-                                        _server = null;
-                                        _cts = null;
-                                        _shouldBeRunning = false;
-                                        _currentStatus = report.Written ? "Error (report written)" : "Error";
-                                        _messages.Enqueue(
-                                            report.Written
-                                                ? $"MCP startup report: {report.Detail}"
-                                                : $"MCP startup report unavailable: {report.Detail}");
-                                    }
-                                }
-                                if (ownsServer)
-                                {
-                                    await DisposeServerAsync(server, cts).ConfigureAwait(false);
-                                    Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
-                                }
-                            }
-                        });
-                        lock (_statusLock)
-                        {
-                            _serverStartTime = DateTime.UtcNow;
-                            _currentStatus = "Starting";
-                            _totalConnections = 0;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        var report = McpStartupDiagnostics.WriteReport(ex, "Create CassisHost", prefix);
-                        Rhino.RhinoApp.WriteLine($"[MCP ERROR] Failed to create server: {ex.Message}");
-                        Rhino.RhinoApp.WriteLine(
-                            report.Written
-                                ? $"[MCP ERROR] Startup report: {report.Detail}"
-                                : $"[MCP ERROR] Startup report unavailable: {report.Detail}");
-                        lock (_statusLock)
-                        {
-                            _shouldBeRunning = false;
-                            _currentStatus = report.Written ? "Error (report written)" : "Error";
-                            _messages.Enqueue(
-                                report.Written
-                                    ? $"MCP startup report: {report.Detail}"
-                                    : $"MCP startup report unavailable: {report.Detail}");
-                        }
-                        SafeDisposeServer();
-                    }
-                }
-                else if (!_shouldBeRunning && _server != null)
-                {
-                    try
-                    {
-                        var s = _server;
-                        var cts = _cts;
-                        _server = null;
-                        _cts = null;
-
-                        lock (_statusLock) _currentStatus = "Stopping";
-
-                        Task.Run(async () =>
-                        {
-                            var stoppedCleanly = await DisposeServerAsync(s, cts).ConfigureAwait(false);
-                            lock (_statusLock)
-                            {
-                                _currentStatus = stoppedCleanly ? "Stopped" : "Error";
-                                if (stoppedCleanly)
-                                {
-                                    ResetCounters();
-                                }
-                            }
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Rhino.RhinoApp.WriteLine($"[MCP WARN] Error during server shutdown: {ex.Message}");
-                        lock (_statusLock) _currentStatus = "Error";
-                        _server = null;
-                        _cts?.Dispose();
-                        _cts = null;
-                        ResetCounters();
-                    }
-                }
-
-                da.SetDataList(0, _messages.ToArray());
-            }
-            catch (Exception ex)
-            {
-                var report = McpStartupDiagnostics.WriteReport(ex, "SolveInstance", null);
-                var reportMessage = report.Written
-                    ? $"Report: {report.Detail}"
-                    : $"Report unavailable: {report.Detail}";
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"MCP Component Error: {ex.Message}. {reportMessage}");
-                lock (_statusLock)
-                {
-                    if (_server is null)
-                    {
-                        _currentStatus = report.Written ? "Error (report written)" : "Error";
-                    }
-                }
-                da.SetDataList(0, new List<string> { $"Error: {ex.Message}", reportMessage });
-            }
+            base.AddedToDocument(document);
+            EnsureSubscribed();
+            SyncToolsFromRuntime();
         }
 
-        private void ResetCounters()
+        /// <summary>
+        /// After auto-start (all tools), reflect the live runtime selection in the component UI.
+        /// </summary>
+        private void SyncToolsFromRuntime()
         {
-            while (_messages.TryDequeue(out _))
-            {
-            }
-            _logs.Clear();
-            _connectionLog.Clear();
-            _totalMessagesReceived = 0;
-            _totalConnections = 0;
-            _lastMessageTime = null;
-            _lastConnectionTime = null;
-        }
-
-        private void SafeDisposeServer()
-        {
-            var server = _server;
-            var cts = _cts;
-            _server = null;
-            _cts = null;
-
-            _ = DisposeServerAsync(server, cts);
-        }
-
-        private static async Task<bool> DisposeServerAsync(CassisHost? server, CancellationTokenSource? cts)
-        {
-            var succeeded = true;
-            try
-            {
-                cts?.Cancel();
-            }
-            catch (Exception ex)
-            {
-                succeeded = false;
-                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error cancelling server: {ex}");
-            }
-
-            if (server is not null)
-            {
-                try
-                {
-                    await server.StopAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    succeeded = false;
-                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error stopping server: {ex}");
-                }
-
-                try
-                {
-                    await server.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    succeeded = false;
-                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing server: {ex}");
-                }
-            }
-
-            try
-            {
-                cts?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                succeeded = false;
-                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error disposing cancellation source: {ex}");
-            }
-
-            return succeeded;
-        }
-
-        private async Task ObserveServerCompletionAsync(
-            CassisHost server,
-            CancellationTokenSource cts,
-            string prefix)
-        {
-            Exception? failure = null;
-            try
-            {
-                await server.Completion.ConfigureAwait(false);
-                if (!cts.IsCancellationRequested)
-                {
-                    failure = new InvalidOperationException("The MCP listener stopped without a shutdown request.");
-                }
-            }
-            catch (Exception ex) when (!cts.IsCancellationRequested)
-            {
-                failure = ex;
-            }
-
-            if (failure is null)
+            var status = CassisRuntime.Status;
+            if (string.Equals(status, "Stopped", StringComparison.Ordinal) ||
+                string.IsNullOrEmpty(status))
             {
                 return;
             }
 
-            var report = McpStartupDiagnostics.WriteReport(failure, "Listener lifetime", prefix);
-            Rhino.RhinoApp.WriteLine($"[MCP ERROR] Listener stopped unexpectedly: {failure}");
-            lock (_statusLock)
-            {
-                if (!ReferenceEquals(_server, server))
-                {
-                    return;
-                }
-
-                _server = null;
-                _cts = null;
-                _shouldBeRunning = false;
-                _currentStatus = report.Written ? "Error (report written)" : "Error";
-                _messages.Enqueue(
-                    report.Written
-                        ? $"MCP listener report: {report.Detail}"
-                        : $"MCP listener report unavailable: {report.Detail}");
-            }
-
-            await DisposeServerAsync(server, cts).ConfigureAwait(false);
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
+            _enabledTools = new HashSet<string>(CassisRuntime.EnabledTools, StringComparer.OrdinalIgnoreCase);
         }
 
-        // === Networking utils (same idea as original) ===
-        private static bool IsPortAvailable(int port)
+        public override void RemovedFromDocument(GH_Document document)
+        {
+            Unsubscribe();
+            base.RemovedFromDocument(document);
+        }
+
+        private void EnsureSubscribed()
+        {
+            if (_subscribed)
+            {
+                return;
+            }
+
+            CassisRuntime.Changed += OnRuntimeChanged;
+            _subscribed = true;
+        }
+
+        private void Unsubscribe()
+        {
+            if (!_subscribed)
+            {
+                return;
+            }
+
+            CassisRuntime.Changed -= OnRuntimeChanged;
+            _subscribed = false;
+        }
+
+        private void OnRuntimeChanged()
+        {
+            ThrottledExpireSolution();
+        }
+
+        protected override void SolveInstance(IGH_DataAccess da)
         {
             try
             {
-                var ip = IPGlobalProperties.GetIPGlobalProperties();
-                foreach (var c in ip.GetActiveTcpConnections()) if (c.LocalEndPoint.Port == port) return false;
-                foreach (var l in ip.GetActiveTcpListeners()) if (l.Port == port) return false;
-                return true;
+                Message = string.Empty;
+                string prefix = string.Empty;
+                da.GetData(0, ref prefix);
+                _ = prefix;
+                da.SetDataList(0, CassisRuntime.SnapshotMessages());
             }
             catch (Exception ex)
             {
-                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error checking port availability: {ex.Message}");
-                return false;
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"MCP Component Error: {ex.Message}");
+                da.SetDataList(0, new List<string> { $"Error: {ex.Message}" });
             }
         }
 
-        private static string GetAvailablePort(string originalPrefix)
-        {
-            try
-            {
-                var uri = new Uri(originalPrefix);
-                var basePort = uri.Port;
-                if (IsPortAvailable(basePort)) return originalPrefix;
-                throw new InvalidOperationException($"Port {basePort} is already in use.");
-            }
-            catch (Exception ex)
-            {
-                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error resolving available port: {ex.Message}");
-                return originalPrefix;
-            }
-        }
-
-        // === Message hook (enhanced tool call tracking) ===
-        private void OnMessage(JsonRpcMessage msg)
-        {
-            var ts = DateTime.UtcNow;
-            var refreshListenerUi = false;
-            string? toolNameFromRequest = null;
-            var looksLikeToolResponse = false;
-            var clientInitialized = msg is JsonRpcNotification notification &&
-                                    notification.Method == "notifications/initialized";
-
-            if (clientInitialized)
-            {
-                refreshListenerUi = true;
-            }
-            else if (msg is JsonRpcRequest req && req.Method == "tools/call")
-            {
-                refreshListenerUi = true;
-                try
-                {
-                    var p = JsonSerializer.Serialize(req.Params);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(p);
-                    if (dict != null && dict.TryGetValue("name", out var n))
-                    {
-                        toolNameFromRequest = n?.ToString() ?? "Unknown Tool";
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error parsing tool call name: {ex.Message}");
-                    toolNameFromRequest = "Unknown Tool";
-                }
-            }
-            else if (msg is JsonRpcResponse resp && resp.Result != null)
-            {
-                try
-                {
-                    var resultJson = JsonSerializer.Serialize(resp.Result);
-                    var resultDict = JsonSerializer.Deserialize<Dictionary<string, object>>(resultJson);
-                    if (resultDict != null &&
-                        (resultDict.ContainsKey("content") ||
-                         resultDict.ContainsKey("success") ||
-                         resultDict.ContainsKey("result") ||
-                         resultDict.ContainsKey("data")))
-                    {
-                        looksLikeToolResponse = true;
-                        refreshListenerUi = true;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error parsing tool response: {ex.Message}");
-                }
-            }
-
-            lock (_statusLock)
-            {
-                _lastMessageTime = ts;
-                _totalMessagesReceived++;
-                _clientInitialized |= clientInitialized;
-
-                if (toolNameFromRequest != null)
-                {
-                    _lastToolCall = ts;
-                    _lastToolName = toolNameFromRequest;
-                }
-                else if (looksLikeToolResponse)
-                {
-                    _lastToolCall = ts;
-                    if (string.IsNullOrEmpty(_lastToolName))
-                    {
-                        _lastToolName = "Tool Response";
-                    }
-                }
-            }
-
-            _messages.Enqueue(JsonSerializer.Serialize(msg));
-
-            if (refreshListenerUi)
-            {
-                ThrottledExpireSolution();
-            }
-        }
-
-        /// <summary>
-        /// Throttles ExpireSolution calls to at most once per 500ms with a trailing edge
-        /// to ensure the final message in a burst still triggers a UI update.
-        /// </summary>
         private void ThrottledExpireSolution()
         {
             var expireNow = false;
-            lock (_statusLock)
+            lock (_uiLock)
             {
                 var now = DateTime.UtcNow;
                 if ((now - _lastExpireSolution).TotalMilliseconds >= 500)
@@ -588,10 +153,10 @@ namespace Cassis
                 return;
             }
 
-            Task.Delay(500).ContinueWith(
+            System.Threading.Tasks.Task.Delay(500).ContinueWith(
                 _ =>
                 {
-                    lock (_statusLock)
+                    lock (_uiLock)
                     {
                         _expirePending = false;
                         _lastExpireSolution = DateTime.UtcNow;
@@ -599,91 +164,46 @@ namespace Cassis
 
                     QueueCanvasRefresh();
                 },
-                TaskScheduler.Default);
+                System.Threading.Tasks.TaskScheduler.Default);
         }
 
-        /// <summary>
-        /// Refreshes the listener canvas. Must not be called while holding <see cref="_statusLock"/>.
-        /// </summary>
         private void QueueCanvasRefresh()
         {
-            Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
+            RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
         }
 
-        // === UI contract for ServerAttributes / ToolPanelAttributes ===
         public string GetButtonText()
         {
-            lock (_statusLock)
+            var status = CassisRuntime.Status;
+            if (status.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
             {
-                if (_currentStatus.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
-                {
-                    return "Restart Server";
-                }
+                return "Restart Server";
+            }
 
-                return _currentStatus switch
-                {
-                    "Running" => "Stop Server",
-                    "Starting" => "Starting...",
-                    "Stopping" => "Stopping...",
-                    "Stopped" => "Start Server",
-                    _ => "Start Server"
-                };
-            }
-        }
-
-        public string GetStatusLabel()
-        {
-            lock (_statusLock) return _currentStatus;
-        }
-        public string GetUptimeShort()
-        {
-            lock (_statusLock)
+            return status switch
             {
-                if (_currentStatus == "Stopped" || !_serverStartTime.HasValue) return "";
-                var d = DateTime.UtcNow - _serverStartTime.Value;
-                if (d.TotalDays >= 1) return $"{d.Days}d {d.Hours}h";
-                if (d.TotalHours >= 1) return $"{d.Hours}h {d.Minutes}m";
-                if (d.TotalMinutes >= 1) return $"{d.Minutes}m {d.Seconds}s";
-                return $"{d.TotalSeconds:F0}s";
-            }
-        }
-        public string GetMessageCountString()
-        {
-            lock (_statusLock) return _totalMessagesReceived.ToString();
-        }
-        public string GetLastMsgShort()
-        {
-            lock (_statusLock)
-            {
-                if (!_lastMessageTime.HasValue) return "—";
-                var d = DateTime.UtcNow - _lastMessageTime.Value;
-                if (d.TotalMinutes < 1) return $"{d.TotalSeconds:F0}s ago";
-                if (d.TotalHours < 1) return $"{d.TotalMinutes:F0}m ago";
-                return $"{d.TotalHours:F1}h ago";
-            }
-        }
-        public string GetLastToolShort()
-        {
-            lock (_statusLock)
-            {
-                if (_lastToolCall == null || string.IsNullOrEmpty(_lastToolName)) return "—";
-                var d = DateTime.UtcNow - _lastToolCall.Value;
-                string when = d.TotalMinutes < 1 ? $"{d.TotalSeconds:F0}s ago" :
-                              d.TotalHours < 1 ? $"{d.TotalMinutes:F0}m ago" :
-                              $"{d.TotalHours:F1}h ago";
-                return $"{_lastToolName} • {when}";
-            }
+                "Running" => "Stop Server",
+                "Starting" => "Starting...",
+                "Stopping" => "Stopping...",
+                "Restarting" => "Restarting...",
+                "Stopped" => "Start Server",
+                _ => "Start Server"
+            };
         }
 
-        public bool ShouldShowAgentSetup()
-        {
-            lock (_statusLock) return ShouldShowAgentSetup(_clientInitialized);
-        }
+        public string GetStatusLabel() => CassisRuntime.Status;
 
-        internal static bool ShouldShowAgentSetup(bool clientInitialized)
-        {
-            return !clientInitialized;
-        }
+        public string GetUptimeShort() => CassisRuntime.GetUptimeShort();
+
+        public string GetMessageCountString() => CassisRuntime.GetMessageCountString();
+
+        public string GetLastMsgShort() => CassisRuntime.GetLastMsgShort();
+
+        public string GetLastToolShort() => CassisRuntime.GetLastToolShort();
+
+        public bool ShouldShowAgentSetup() => ShouldShowAgentSetup(CassisRuntime.ClientInitialized);
+
+        internal static bool ShouldShowAgentSetup(bool clientInitialized) => !clientInitialized;
 
         public void CopyMcpUrl()
         {
@@ -714,24 +234,28 @@ namespace Cassis
         {
             try
             {
-                lock (_statusLock)
+                var status = CassisRuntime.Status;
+                if (!CanToggleServer(status))
                 {
-                    if (!CanToggleServer(_currentStatus))
-                    {
-                        return;
-                    }
-
-                    _shouldBeRunning = !_shouldBeRunning;
-                    _currentStatus = _shouldBeRunning ? "Starting" : "Stopping";
+                    return;
                 }
-                Rhino.RhinoApp.InvokeOnUiThread((Action)(() => { ExpireSolution(true); }));
+
+                if (string.Equals(status, "Running", StringComparison.Ordinal))
+                {
+                    CassisRuntime.RequestStop();
+                }
+                else
+                {
+                    CassisRuntime.RequestStart(McpEndpoint, _enabledTools);
+                }
+
+                ExpireSolution(true);
             }
             catch (Exception ex)
             {
-                Rhino.RhinoApp.WriteLine($"[MCP WARN] Error handling button click: {ex.Message}");
-                lock (_statusLock) _currentStatus = "Error";
+                RhinoApp.WriteLine($"[MCP WARN] Error handling button click: {ex.Message}");
             }
-}
+        }
 
         internal static bool CanToggleServer(string status)
         {
@@ -739,9 +263,6 @@ namespace Cassis
                    status != "Stopping" &&
                    status != "Restarting";
         }
-
-        // === Tool enable/disable ===
-        private HashSet<string> _enabledTools = new(ToolCategories.DefaultEnabled);
 
         public int EnabledToolCount => _enabledTools.Count;
 
@@ -751,64 +272,34 @@ namespace Cassis
         {
             RecordUndoEvent("Toggle MCP Tool");
             if (!_enabledTools.Remove(name))
+            {
                 _enabledTools.Add(name);
-            RestartTransport();
+            }
+
+            CassisRuntime.SetToolEnabled(name, _enabledTools.Contains(name));
+            ExpireSolution(true);
         }
 
         public void ToggleCategory(string categoryName, string[] tools)
         {
             RecordUndoEvent("Toggle MCP Tool Category");
-            bool allEnabled = tools.All(t => _enabledTools.Contains(t));
+            var allEnabled = tools.All(t => _enabledTools.Contains(t));
             foreach (var t in tools)
             {
                 if (allEnabled)
+                {
                     _enabledTools.Remove(t);
+                }
                 else
+                {
                     _enabledTools.Add(t);
+                }
             }
-            RestartTransport();
+
+            CassisRuntime.SetCategoryEnabled(tools, !allEnabled);
+            ExpireSolution(true);
         }
 
-        private void RestartTransport()
-        {
-            if (Interlocked.Exchange(ref _transportRestartInProgress, 1) == 1)
-            {
-                Rhino.RhinoApp.WriteLine("[MCP INFO] Transport restart already in progress; skipping duplicate restart request.");
-                return;
-            }
-
-            var server = _server;
-            var cts = _cts;
-            _server = null;
-            _cts = null;
-
-            lock (_statusLock)
-            {
-                if (_shouldBeRunning)
-                {
-                    _currentStatus = "Restarting";
-                }
-            }
-
-            Task.Run(async () =>
-            {
-                try
-                {
-                    Rhino.RhinoApp.WriteLine("[MCP INFO] Restarting transport after tool configuration change.");
-                    await DisposeServerAsync(server, cts).ConfigureAwait(false);
-                }
-                finally
-                {
-                    Interlocked.Exchange(ref _transportRestartInProgress, 0);
-                    if (_shouldBeRunning)
-                    {
-                        Rhino.RhinoApp.InvokeOnUiThread((Action)(() => ExpireSolution(true)));
-                    }
-                }
-            });
-        }
-
-        // === GH serialization ===
         public override bool Write(GH_IWriter writer)
         {
             base.Write(writer);
@@ -826,14 +317,27 @@ namespace Cassis
                 _enabledTools = new HashSet<string>(
                     csv.Split(',').Where(t => allKnown.Contains(t)));
             }
+
             return true;
         }
 
-        // === Right-click menu ===
-        protected override void AppendAdditionalComponentMenuItems(System.Windows.Forms.ToolStripDropDown menu)
+        protected override void AppendAdditionalComponentMenuItems(ToolStripDropDown menu)
         {
             base.AppendAdditionalComponentMenuItems(menu);
             GH_DocumentObject.Menu_AppendSeparator(menu);
+            GH_DocumentObject.Menu_AppendItem(
+                menu,
+                "Auto-start MCP when Grasshopper loads",
+                (s, e) =>
+                {
+                    CassisSettings.AutoStart = !CassisSettings.AutoStart;
+                    RhinoApp.WriteLine(
+                        CassisSettings.AutoStart
+                            ? "[Cassis] Auto-start enabled (applies next time Grasshopper loads)."
+                            : "[Cassis] Auto-start disabled (applies next time Grasshopper loads).");
+                },
+                true,
+                CassisSettings.AutoStart);
             GH_DocumentObject.Menu_AppendItem(menu, "Open Agent Setup", (s, e) => OpenAgentSetup());
             GH_DocumentObject.Menu_AppendItem(menu, "Copy MCP URL", (s, e) => CopyMcpUrl());
             GH_DocumentObject.Menu_AppendSeparator(menu);
@@ -844,15 +348,20 @@ namespace Cassis
                 var catItem = GH_DocumentObject.Menu_AppendItem(menu, category);
                 foreach (var tool in tools)
                 {
-                    bool enabled = IsToolEnabled(tool);
                     var toolName = tool;
-                    GH_DocumentObject.Menu_AppendItem(catItem.DropDown, tool, (s, e) => ToggleTool(toolName), true, enabled);
+                    var enabled = IsToolEnabled(tool);
+                    GH_DocumentObject.Menu_AppendItem(
+                        catItem.DropDown,
+                        tool,
+                        (s, e) => ToggleTool(toolName),
+                        true,
+                        enabled);
                 }
             }
         }
 
-        // GH IDs
         public override Guid ComponentGuid => new Guid("2F3EBD4C-3848-4C6A-9A60-9D59E5D6A5C8");
+
         protected override Bitmap Icon => Resources.cassis_icon;
     }
 }
