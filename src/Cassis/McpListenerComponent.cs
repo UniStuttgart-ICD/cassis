@@ -20,6 +20,8 @@ namespace Cassis
         public const string AgentSetupUrl = CassisRuntime.AgentSetupUrl;
 
         private HashSet<string> _enabledTools = new(ToolCategories.DefaultEnabled);
+        private string? _activePreset; // null | "all" | "readonly"
+        private HashSet<string>? _toolsBeforePreset;
         private bool _subscribed;
         private DateTime _lastExpireSolution = DateTime.MinValue;
         private bool _expirePending;
@@ -73,6 +75,7 @@ namespace Cassis
             }
 
             _enabledTools = new HashSet<string>(CassisRuntime.EnabledTools, StringComparer.OrdinalIgnoreCase);
+            ClearPresetWithoutRestore();
         }
 
         public override void RemovedFromDocument(GH_Document document)
@@ -268,9 +271,12 @@ namespace Cassis
 
         public bool IsToolEnabled(string name) => _enabledTools.Contains(name);
 
+        public string? ActivePreset => _activePreset;
+
         public void ToggleTool(string name)
         {
             RecordUndoEvent("Toggle MCP Tool");
+            ClearPresetWithoutRestore();
             if (!_enabledTools.Remove(name))
             {
                 _enabledTools.Add(name);
@@ -283,6 +289,7 @@ namespace Cassis
         public void ToggleCategory(string categoryName, string[] tools)
         {
             RecordUndoEvent("Toggle MCP Tool Category");
+            ClearPresetWithoutRestore();
             var allEnabled = tools.All(t => _enabledTools.Contains(t));
             foreach (var t in tools)
             {
@@ -298,6 +305,49 @@ namespace Cassis
 
             CassisRuntime.SetCategoryEnabled(tools, !allEnabled);
             ExpireSolution(true);
+        }
+
+        /// <summary>
+        /// Toggle a tool preset. Deselect restores the pre-preset snapshot.
+        /// </summary>
+        public void TogglePreset(string preset)
+        {
+            if (preset != "all" && preset != "readonly")
+            {
+                return;
+            }
+
+            RecordUndoEvent("Toggle MCP Tool Preset");
+
+            if (_activePreset == preset)
+            {
+                _enabledTools = _toolsBeforePreset is { Count: > 0 }
+                    ? new HashSet<string>(_toolsBeforePreset, StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(ToolCategories.DefaultEnabled, StringComparer.OrdinalIgnoreCase);
+                _activePreset = null;
+                _toolsBeforePreset = null;
+            }
+            else
+            {
+                if (_activePreset is null)
+                {
+                    _toolsBeforePreset = new HashSet<string>(_enabledTools, StringComparer.OrdinalIgnoreCase);
+                }
+
+                _activePreset = preset;
+                _enabledTools = preset == "all"
+                    ? new HashSet<string>(ToolCategories.AllTools(), StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(ToolCategories.ReadOnly, StringComparer.OrdinalIgnoreCase);
+            }
+
+            CassisRuntime.ReplaceEnabledTools(_enabledTools);
+            ExpireSolution(true);
+        }
+
+        private void ClearPresetWithoutRestore()
+        {
+            _activePreset = null;
+            _toolsBeforePreset = null;
         }
 
         public override bool Write(GH_IWriter writer)

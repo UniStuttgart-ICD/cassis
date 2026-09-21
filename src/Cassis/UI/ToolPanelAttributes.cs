@@ -21,16 +21,23 @@ public class ToolPanelAttributes : ServerAttributes
     private readonly HashSet<string> _expandedCategories = new();
     private int _hoveredRowIndex = -1;
     private bool _headerHovered;
+    private bool _presetHovered;
+    private int _hoveredPresetIndex = -1; // 0 = Select all, 1 = Read only
 
     private const float HeaderHeight = 20f;
+    private const float PresetHeight = 20f;
     private const float CategoryRowHeight = 18f;
     private const float ToolRowHeight = 16f;
     private const float CheckboxSize = 11f;
+    private const float RadioSize = 11f;
     private const float Padding = 4f;
     private const float IndentSize = 16f;
     private const float MinPanelWidth = 200f;
 
     private RectangleF _componentBounds;
+    private RectangleF _presetBounds;
+    private RectangleF _selectAllBounds;
+    private RectangleF _readOnlyBounds;
     private RectangleF _headerBounds;
     private RectangleF _panelBounds;
     private readonly List<RowInfo> _visibleRows = new();
@@ -89,8 +96,14 @@ public class ToolPanelAttributes : ServerAttributes
 
         float panelWidth = Math.Max(_componentBounds.Width, MinPanelWidth);
         float headerX = _componentBounds.Left + (_componentBounds.Width - panelWidth) / 2;
-        float headerY = _componentBounds.Bottom + 2;
+        float presetY = _componentBounds.Bottom + 2;
 
+        _presetBounds = new RectangleF(headerX, presetY, panelWidth, PresetHeight);
+        float halfW = panelWidth / 2f;
+        _selectAllBounds = new RectangleF(headerX, presetY, halfW, PresetHeight);
+        _readOnlyBounds = new RectangleF(headerX + halfW, presetY, halfW, PresetHeight);
+
+        float headerY = presetY + PresetHeight + 2;
         _headerBounds = new RectangleF(headerX, headerY, panelWidth, HeaderHeight);
         _visibleRows.Clear();
 
@@ -161,6 +174,7 @@ public class ToolPanelAttributes : ServerAttributes
     public override bool IsPickRegion(PointF point)
     {
         if (_componentBounds.Contains(point)) return true;
+        if (_presetBounds.Contains(point)) return true;
         if (_headerBounds.Contains(point)) return true;
         if (_isPanelExpanded && _panelBounds.Contains(point)) return true;
         return false;
@@ -221,10 +235,61 @@ public class ToolPanelAttributes : ServerAttributes
         graphics.SmoothingMode = SmoothingMode.HighQuality;
         graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
+        RenderPresetBar(graphics);
         RenderHeader(graphics);
 
         if (_isPanelExpanded)
             RenderPanel(graphics);
+    }
+
+    private void RenderPresetBar(Graphics graphics)
+    {
+        var bg = _presetHovered ? ToolPanelColours.HeaderBackgroundHover : ToolPanelColours.HeaderBackground;
+        using (var brush = new SolidBrush(bg))
+        using (var path = RoundedRect(_presetBounds, 3))
+            graphics.FillPath(brush, path);
+
+        using (var pen = new Pen(ToolPanelColours.HeaderBorder, 1))
+        using (var path = RoundedRect(_presetBounds, 3))
+            graphics.DrawPath(pen, path);
+
+        DrawPresetOption(graphics, _selectAllBounds, "Select all",
+            McpOwner.ActivePreset == "all", _hoveredPresetIndex == 0);
+        DrawPresetOption(graphics, _readOnlyBounds, "Read only",
+            McpOwner.ActivePreset == "readonly", _hoveredPresetIndex == 1);
+    }
+
+    private void DrawPresetOption(Graphics graphics, RectangleF cell, string label, bool selected, bool hovered)
+    {
+        float radioX = cell.Left + Padding + 4;
+        float radioY = cell.Top + ((cell.Height - RadioSize) / 2);
+        var radioBounds = new RectangleF(radioX, radioY, RadioSize, RadioSize);
+        DrawRadio(graphics, radioBounds, selected, hovered);
+
+        float textX = radioBounds.Right + 6;
+        using var brush = new SolidBrush(ToolPanelColours.HeaderText);
+        using var font = GH_FontServer.NewFont(GH_FontServer.Standard, 8f / GH_GraphicsUtil.UiScale);
+        var textBounds = new RectangleF(textX, cell.Top, cell.Right - textX - Padding, cell.Height);
+        var format = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
+        graphics.DrawString(label, font, brush, textBounds, format);
+    }
+
+    private static void DrawRadio(Graphics graphics, RectangleF bounds, bool selected, bool hovered)
+    {
+        var borderColor = hovered ? ToolPanelColours.CheckboxBorderHover : ToolPanelColours.CheckboxBorder;
+
+        using (var bgBrush = new SolidBrush(ToolPanelColours.CheckboxBackground))
+            graphics.FillEllipse(bgBrush, bounds);
+
+        using (var pen = new Pen(borderColor, 1))
+            graphics.DrawEllipse(pen, bounds);
+
+        if (selected)
+        {
+            var inner = new RectangleF(bounds.X + 2.5f, bounds.Y + 2.5f, bounds.Width - 5, bounds.Height - 5);
+            using var fill = new SolidBrush(ToolPanelColours.CheckboxFill);
+            graphics.FillEllipse(fill, inner);
+        }
     }
 
     private void RenderHeader(Graphics graphics)
@@ -399,6 +464,20 @@ public class ToolPanelAttributes : ServerAttributes
     {
         if (e.Button == MouseButtons.Left)
         {
+            if (_selectAllBounds.Contains(e.CanvasLocation))
+            {
+                McpOwner.TogglePreset("all");
+                sender.Refresh();
+                return GH_ObjectResponse.Handled;
+            }
+
+            if (_readOnlyBounds.Contains(e.CanvasLocation))
+            {
+                McpOwner.TogglePreset("readonly");
+                sender.Refresh();
+                return GH_ObjectResponse.Handled;
+            }
+
             if (_headerBounds.Contains(e.CanvasLocation))
             {
                 _isPanelExpanded = !_isPanelExpanded;
@@ -445,6 +524,23 @@ public class ToolPanelAttributes : ServerAttributes
     public override GH_ObjectResponse RespondToMouseMove(GH_Canvas sender, GH_CanvasMouseEvent e)
     {
         bool needsRefresh = false;
+
+        bool presetHovered = _presetBounds.Contains(e.CanvasLocation);
+        if (presetHovered != _presetHovered)
+        {
+            _presetHovered = presetHovered;
+            needsRefresh = true;
+        }
+
+        int newPresetHover = -1;
+        if (_selectAllBounds.Contains(e.CanvasLocation)) newPresetHover = 0;
+        else if (_readOnlyBounds.Contains(e.CanvasLocation)) newPresetHover = 1;
+        if (newPresetHover != _hoveredPresetIndex)
+        {
+            _hoveredPresetIndex = newPresetHover;
+            needsRefresh = true;
+        }
+
         bool headerHovered = _headerBounds.Contains(e.CanvasLocation);
         if (headerHovered != _headerHovered)
         {
@@ -474,7 +570,7 @@ public class ToolPanelAttributes : ServerAttributes
         if (needsRefresh)
             sender.Refresh();
 
-        if (_headerHovered || _hoveredRowIndex >= 0)
+        if (_presetHovered || _headerHovered || _hoveredRowIndex >= 0)
         {
             Grasshopper.Instances.CursorServer.AttachCursor(sender, "GH_HandCursor");
             return GH_ObjectResponse.Handled;
