@@ -46,6 +46,26 @@ public static class ToolCategories
         "Canvas_Snapshot",
     };
 
+    /// <summary>Inspect-only tools: no GH mutation, no document write/load, no orbit/named-view edits.</summary>
+    public static readonly HashSet<string> ReadOnly = new()
+    {
+        "List_CSharp_Scripts", "Get_CSharp_Script", "Get_CSharp_Script_Errors",
+        "List_Python_Scripts", "Get_Python_Script", "Get_Python_Script_Errors",
+        "Get_Parameter_TypeHints",
+        "Get_AllComponents", "Get_ComponentCount", "GetDetailedComponentInfo",
+        "GetDetailedComponentInfoById", "Get_Components_In_Group",
+        "Get_Component_Output", "Get_Component_State",
+        "GetAllConnections", "ValidateConnection",
+        "List_Panels", "Get_Panel_Text",
+        "GetSolutionState",
+        "List_Viewports", "Capture_Viewport", "Capture_Canvas", "Save_HiRes_Canvas",
+        "GetDocumentInfo", "ListOpenDocuments", "Canvas_Snapshot",
+        "GetSystemHealth", "RunHealthCheck", "ListHealthChecks",
+        "CreateGrasshopperDefinition", "OptimizeGrasshopperDefinition",
+        "TroubleshootGrasshopper", "LearnGrasshopperConcept",
+        "AnalyzeGrasshopperDefinition",
+    };
+
     /// <summary>All known tool names, flat.</summary>
     public static IEnumerable<string> AllTools()
     {

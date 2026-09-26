@@ -6,7 +6,7 @@ Your AI client must also be connected to Cassis.
 ## Start Cassis
 
 1. Restart Rhino after installing or updating Cassis.
-2. Open Grasshopper. MCP **auto-starts** on load (all tools enabled) at
+2. Open Grasshopper. The MCP server **auto-starts** on load (all tools enabled) at
    `http://localhost:3003/mcp/`.
 3. Configure your AI client with:
 

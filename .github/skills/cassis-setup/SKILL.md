@@ -57,7 +57,7 @@ Frameworks name this transport differently (`http`, `url`, or `serverUrl`). The 
 Before changing a client configuration, show the user the planned file, scope, and
 change, then get permission. Preserve existing servers and settings.
 
-## Step 4: Start Grasshopper (MCP auto-starts)
+## Step 4: Start Grasshopper (server auto-starts)
 
 MCP starts automatically when Grasshopper loads Cassis (all tools enabled). No
 canvas component is required.

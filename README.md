@@ -72,7 +72,7 @@ The build deploys `Cassis.gha` to the platform's Grasshopper plug-in folder auto
 
 ## Usage
 
-1. Open Grasshopper — MCP **auto-starts** (all tools) at `http://localhost:3003/mcp/`
+1. Open Grasshopper — the MCP server **auto-starts** (all tools) at `http://localhost:3003/mcp/`
 2. Connect your AI client using the [AI client setup guide](docs/agent-setup.md)
 
 Optional: place the **Cassis** component for Start/Stop UI and tool toggles.

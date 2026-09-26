@@ -27,6 +27,18 @@ public class ComponentStateToolTests
     }
 
     [Test]
+    public void ReadOnly_IsInspectOnlySubset()
+    {
+        var all = ToolCategories.AllTools().ToHashSet(StringComparer.Ordinal);
+
+        Assert.That(ToolCategories.ReadOnly.IsSubsetOf(all), Is.True);
+        Assert.That(ToolCategories.ReadOnly, Does.Contain("Get_AllComponents"));
+        Assert.That(ToolCategories.ReadOnly, Does.Not.Contain("Edit_CSharp_Script"));
+        Assert.That(ToolCategories.ReadOnly, Does.Not.Contain("AddComponent"));
+        Assert.That(ToolCategories.ReadOnly, Does.Not.Contain("SaveDocument"));
+    }
+
+    [Test]
     public void ToolSelection_IncludesComponentStateToolsWhenEnabled()
     {
         var enabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
