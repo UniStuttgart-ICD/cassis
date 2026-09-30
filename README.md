@@ -123,7 +123,7 @@ Tools are organized by category. Default-enabled tools marked with **(D)**.
 
 | Category | Examples |
 |----------|----------|
-| **Components** | `addcomponent` **(D)**, `getdetailedcomponentinfo`, `set_component_value` |
+| **Components** | `addcomponent` **(D)**, `move_component` **(D)**, `removecomponents` **(D)**, `getdetailedcomponentinfo`, `set_component_value` |
 | **Scripts** | `list_csharp_scripts` **(D)**, `edit_csharp_script` **(D)**, `add_script_parameter` |
 | **Connections** | `getallconnections` **(D)**, `connect_components_by_name`, `validateconnection` |
 | **Panels** | `list_panels` **(D)**, `get_panel_text` **(D)**, `set_panel_text` **(D)** |

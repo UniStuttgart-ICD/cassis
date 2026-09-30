@@ -26,18 +26,22 @@ namespace Cassis.Tools;
 public static class ComponentTools
 {
     [McpServerTool]
-    [Description("Adds a component to the Grasshopper canvas at the specified position")]
+    [Description(
+        "Adds a component at (x,y). Place clear of existing bounds — multiple adds at the same point stack. " +
+        "Typical heights: Material ~104, PreviewLW ~84, multi-output C# ~244. " +
+        "Row pitch ≥ max(neighbor heights)+40 (~160–180 for Material). " +
+        "Flow: inputs → C# → [Material|Preview*] → next; PreviewLW at Material.x+~150.")]
     public static async Task<CallToolResult> AddComponent(
         IGrasshopperComponentService componentService,
         [Description("Type of component to add")]
         string type,
-        [Description("X coordinate position on the canvas")]
+        [Description("X coordinate — absolute canvas position")]
         double x,
-        [Description("Y coordinate position on the canvas")]
+        [Description("Y coordinate — absolute canvas position; offset each add so bounds do not coincide")]
         double y,
-        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        [Description("Gap used only when avoidOverlap is true (default 16)")]
         float padding = CanvasPlacement.DefaultPadding,
-        [Description("When true, nudge away from overlapping components (default true)")]
+        [Description("When true, nudge away from overlapping components (default true). For designed grids prefer false and pick clear coords.")]
         bool avoidOverlap = true)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
@@ -1531,7 +1535,8 @@ public static class ComponentTools
     /// Removes specific components by their IDs instead of clearing the entire document
     /// </summary>
     [McpServerTool]
-    [Description("Removes specific components by their IDs instead of clearing the entire document")]
+    [Description(
+        "Deletes canvas components by GUID. Prefer this over parking duplicates far away or set_component_enabled(false).")]
     public static async Task<CallToolResult> RemoveComponents(
         IGrasshopperDocumentService documentService,
         [Description("Array of component GUIDs to remove")]

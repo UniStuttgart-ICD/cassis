@@ -19,15 +19,19 @@ namespace Cassis.Tools;
 public static class ComponentTransformTools
 {
     [McpServerTool(Name = "Move_Component")]
-    [Description("Moves a component by a relative offset on the Grasshopper canvas")]
+    [Description(
+        "Moves a component by a relative offset (not absolute). " +
+        "For designed grids set avoidOverlap:false — otherwise a nudge can land far from the requested point. " +
+        "Check response requested vs newPosition when nudged:true. " +
+        "Vertical pitch for Material rows ~160–180; chain columns ≥250–300 apart.")]
     public static async Task<CallToolResult> MoveComponent(
         [Description("Component GUID to move")] string componentInstanceGuid,
-        [Description("Relative X offset in canvas units")] double x,
-        [Description("Relative Y offset in canvas units")] double y,
-        [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
+        [Description("Relative X offset in canvas units — compute from get_allcomponents / getdetailed pivots")] double x,
+        [Description("Relative Y offset in canvas units — re-read pivots after any nudge to avoid drift")] double y,
+        [Description("Gap used only when avoidOverlap is true (default 16; too tight for tall GH components)")]
         float padding = CanvasPlacement.DefaultPadding,
-        [Description("When true, nudge away from overlapping components after the move (default true)")]
-        bool avoidOverlap = true)
+        [Description("Nudge away from overlaps after move. Default false for intentional layouts; set true only when filling gaps.")]
+        bool avoidOverlap = false)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
