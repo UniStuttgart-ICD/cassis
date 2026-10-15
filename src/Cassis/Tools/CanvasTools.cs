@@ -24,7 +24,7 @@ namespace Cassis.Tools;
 public static class CanvasTools
 {
     [McpServerTool(Name = "Capture_Canvas")]
-    [Description("Compatibility alias: captures the currently visible Grasshopper canvas and saves it as a PNG image")]
+    [Description("Compatibility alias: captures the currently visible Grasshopper canvas, saves it as a PNG and returns it as an image")]
     public static Task<CallToolResult> CaptureCanvas(
         [Description("Destination file path (defaults to Desktop)")] string? filePath = null)
     {
@@ -33,7 +33,7 @@ public static class CanvasTools
     }
 
     [McpServerTool(Name = "Save_Visible_Canvas")]
-    [Description("Captures the currently visible Grasshopper canvas and saves it as a PNG image")]
+    [Description("Captures the currently visible Grasshopper canvas, saves it as a PNG and returns it as an image")]
     public static async Task<CallToolResult> SaveVisibleCanvas(
         [Description("Destination file path (defaults to Desktop)")] string? filePath = null)
     {
@@ -46,16 +46,11 @@ public static class CanvasTools
                 var targetPath = ResolveSnapshotPath(filePath);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 
-                using (var bitmap = canvas.GetCanvasScreenBuffer(GH_CanvasMode.Export))
-                {
-                    bitmap.Save(targetPath, ImageFormat.Png);
-                }
-
-                return new
-                {
-                    success = true,
-                    file = targetPath
-                };
+                using var bitmap = canvas.GetCanvasScreenBuffer(GH_CanvasMode.Export);
+                bitmap.Save(targetPath, ImageFormat.Png);
+                return McpExtensions.CreateImageResult(
+                    ImageEncoding.EncodePng(bitmap),
+                    new { success = true, file = targetPath, width = bitmap.Width, height = bitmap.Height });
             });
 
             return result;

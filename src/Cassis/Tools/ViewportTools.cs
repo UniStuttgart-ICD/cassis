@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -146,7 +145,7 @@ public static class ViewportTools
                         throw new InvalidOperationException("Viewport capture returned no bitmap. Try lowering resolution or using the simple capture tool.");
                     }
 
-                    var png = EncodePng(bitmap);
+                    var png = ImageEncoding.EncodePng(bitmap);
                     var capturePath = WriteCaptureToDisk(png, view);
                     var metadata = BuildMetadata(view, bitmap, capturePath);
                     metadata.Framing = frameComponents ? "components" : zoomExtents ? "extents" : null;
@@ -368,7 +367,7 @@ public static class ViewportTools
                                    ?? throw new InvalidOperationException(
                                        "Viewport capture returned no bitmap after orbiting. Try lowering resolution.");
 
-                var png = EncodePng(bitmap);
+                var png = ImageEncoding.EncodePng(bitmap);
                 var capturePath = WriteCaptureToDisk(png, view);
                 var metadata = BuildMetadata(view, bitmap, capturePath);
                 ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
@@ -430,9 +429,9 @@ public static class ViewportTools
 
     private static void ValidateDimensions(int width, int height)
     {
-        if (width < 64 || width > 2576 || height < 64 || height > 2576)
+        if (width < 64 || width > ImageEncoding.MaxEdge || height < 64 || height > ImageEncoding.MaxEdge)
         {
-            throw new ArgumentOutOfRangeException(nameof(width), "Width and height must be between 64 and 2576 pixels (larger images exceed model image limits).");
+            throw new ArgumentOutOfRangeException(nameof(width), $"Width and height must be between 64 and {ImageEncoding.MaxEdge} pixels (larger images exceed model image limits).");
         }
     }
 
@@ -515,13 +514,6 @@ public static class ViewportTools
             RhinoApp.WriteLine($"[CaptureViewport] ViewCapture failed: {ex.Message}");
             return null;
         }
-    }
-
-    private static byte[] EncodePng(Bitmap bitmap)
-    {
-        using var stream = new MemoryStream();
-        bitmap.Save(stream, ImageFormat.Png);
-        return stream.ToArray();
     }
 
     private static string WriteCaptureToDisk(byte[] png, RhinoView view)
