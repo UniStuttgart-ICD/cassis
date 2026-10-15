@@ -24,6 +24,8 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     private const int MaxConcurrentRequests = 32;
     private const int MaxRequestBodyBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan RequestBodyTimeout = TimeSpan.FromSeconds(30);
+    private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name";
+    private static readonly object ServerCapabilities = new { tools = new { }, prompts = new { } };
 
     private readonly System.Net.HttpListener _listener = new();
     private readonly McpServerOptions _options;
@@ -413,7 +415,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         {
             SetCorsOrigin(context.Response, requestOrigin);
             context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-            context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id";
+            context.Response.Headers["Access-Control-Allow-Headers"] = CorsAllowedHeaders;
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.Close();
             return;
@@ -431,7 +433,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 // simple CORS preflight (handled above, but kept for safety)
                 SetCorsOrigin(context.Response, requestOrigin);
                 context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-                context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id";
+                context.Response.Headers["Access-Control-Allow-Headers"] = CorsAllowedHeaders;
                 context.Response.StatusCode = (int)HttpStatusCode.OK;
                 context.Response.Close();
                 break;
@@ -766,19 +768,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             if (message is JsonRpcRequest request)
             {
 
-                // Handle core MCP protocol requests
-                var response = request.Method switch
-                {
-                    "initialize" => await HandleInitializeRequest(request),
-                    "tools/list" => await HandleToolsListRequest(request),
-                    "tools/call" => await HandleToolCallRequest(request),
-                    "prompts/list" => await HandlePromptsListRequest(request),
-                    "prompts/get" => await HandlePromptGetRequest(request),
-                    "resources/list" => await HandleResourcesListRequest(request),
-                    "resources/read" => await HandleResourceReadRequest(request),
-                    "ping" => new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { }) },
-                    _ => CreateUnknownMethodError(request.Id, request.Method)
-                };
+                var response = await DispatchAsync(request, modern: false);
 
                 MessageReceived?.Invoke(message);
 
@@ -823,6 +813,22 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
     }
 
+    private async Task<JsonRpcMessage> DispatchAsync(JsonRpcRequest request, bool modern)
+    {
+        return request.Method switch
+        {
+            "initialize" when !modern => await HandleInitializeRequest(request),
+            "tools/list" => await HandleToolsListRequest(request),
+            "tools/call" => await HandleToolCallRequest(request),
+            "prompts/list" => await HandlePromptsListRequest(request),
+            "prompts/get" => await HandlePromptGetRequest(request),
+            "resources/list" when !modern => await HandleResourcesListRequest(request),
+            "resources/read" when !modern => await HandleResourceReadRequest(request),
+            "ping" when !modern => new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { }) },
+            _ => CreateUnknownMethodError(request.Id, request.Method)
+        };
+    }
+
     private async Task<bool> TrySendToSessionAsync(JsonRpcMessage message, string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var session))
@@ -847,7 +853,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             Result = JsonSerializer.SerializeToNode(new
             {
                 protocolVersion = "2025-06-18",
-                capabilities = new { tools = new { }, prompts = new { } },
+                capabilities = ServerCapabilities,
                 serverInfo
             })
         };

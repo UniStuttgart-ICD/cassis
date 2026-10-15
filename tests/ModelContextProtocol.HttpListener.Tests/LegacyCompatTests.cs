@@ -223,6 +223,25 @@ public sealed class LegacyCompatTests
         });
     }
 
+    [Test]
+    public async Task L14_PreflightAllowsModernHeaders()
+    {
+        await WithTransportAsync(async (prefix, client) =>
+        {
+            using var preflight = new HttpRequestMessage(HttpMethod.Options, prefix.TrimEnd('/'));
+            preflight.Headers.Add("Origin", "http://localhost:5173");
+            preflight.Headers.Add("Access-Control-Request-Method", "POST");
+            using var response = await client.SendAsync(preflight);
+
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            var allowed = string.Join(", ", response.Headers.GetValues("Access-Control-Allow-Headers"));
+            Assert.That(allowed, Does.Contain("MCP-Protocol-Version"));
+            Assert.That(allowed, Does.Contain("Mcp-Method"));
+            Assert.That(allowed, Does.Contain("Mcp-Name"));
+            Assert.That(allowed, Does.Contain("Mcp-Session-Id"));
+        });
+    }
+
     private static string Rpc(int id, string method, string paramsJson = "{}") =>
         $$"""{"jsonrpc":"2.0","id":{{id}},"method":"{{method}}","params":{{paramsJson}}}""";
 
