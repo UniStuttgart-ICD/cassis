@@ -27,8 +27,7 @@ public static class ViewportTools
     [McpServerTool(Name = "Capture_Viewport_Simple")]
     [Description("Compatibility alias: captures the active Rhino viewport to disk with default settings")]
     public static Task<CallToolResult> CaptureViewportSimple(
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
-        [Description("Include base64-encoded image data in the response")] bool includeBase64 = false)
+        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
     {
         // Delegate to the full-featured capture with sensible defaults
         return CaptureViewport(
@@ -39,8 +38,7 @@ public static class ViewportTools
             includeAxes: false,
             transparentBackground: false,
             quality: 90,
-            retentionSeconds: retentionSeconds,
-            includeBase64: includeBase64);
+            retentionSeconds: retentionSeconds);
     }
 
     [McpServerTool(Name = "List_Viewports")]
@@ -86,7 +84,7 @@ public static class ViewportTools
     }
 
     [McpServerTool(Name = "Capture_Viewport")]
-    [Description("Captures a Rhino viewport to disk (and optionally base64) with configurable settings")]
+    [Description("Captures a Rhino viewport and returns it as a PNG image plus JSON metadata (the PNG is also saved to disk for retentionSeconds)")]
     public static async Task<CallToolResult> CaptureViewport(
         [Description("Viewport name (optional; uses active viewport when omitted)")] string? viewportName = null,
         [Description("Output width in pixels")] int width = 1024,
@@ -95,8 +93,7 @@ public static class ViewportTools
         [Description("Include world axes in the capture")] bool includeAxes = false,
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
-        [Description("Include base64-encoded image data in the response")] bool includeBase64 = false)
+        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -120,19 +117,11 @@ public static class ViewportTools
                     throw new InvalidOperationException("Viewport capture returned no bitmap. Try lowering resolution or using the simple capture tool.");
                 }
 
-                var capturePath = WriteCaptureToDisk(bitmap, view, quality);
+                var png = EncodePng(bitmap);
+                var capturePath = WriteCaptureToDisk(png, view);
                 var metadata = BuildMetadata(view, bitmap, capturePath);
-
-                string? base64 = null;
-                if (includeBase64)
-                {
-                    using var memoryStream = new MemoryStream();
-                    bitmap.Save(memoryStream, ImageFormat.Png);
-                    base64 = Convert.ToBase64String(memoryStream.ToArray());
-                }
-
                 ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
-                return ViewportCaptureResultClaude.CreateImageResponse(base64, metadata, includeBase64);
+                return McpExtensions.CreateImageResult(png, metadata);
             });
 
             return captureResult;
@@ -163,8 +152,7 @@ public static class ViewportTools
         [Description("Include world axes in the capture")] bool includeAxes = false,
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
-        [Description("Include base64-encoded image data in the response")] bool includeBase64 = false)
+        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -279,38 +267,12 @@ public static class ViewportTools
                                    ?? throw new InvalidOperationException(
                                        "Viewport capture returned no bitmap after orbiting. Try lowering resolution.");
 
-                var capturePath = WriteCaptureToDisk(bitmap, view, quality);
+                var png = EncodePng(bitmap);
+                var capturePath = WriteCaptureToDisk(png, view);
                 var metadata = BuildMetadata(view, bitmap, capturePath);
                 ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
 
-                string? base64 = null;
-                if (includeBase64)
-                {
-                    using var memoryStream = new MemoryStream();
-                    bitmap.Save(memoryStream, ImageFormat.Png);
-                    base64 = Convert.ToBase64String(memoryStream.ToArray());
-                }
-
-                var imageResponse = ViewportCaptureResultClaude.CreateImageResponse(base64, metadata, includeBase64);
-                foreach (var content in imageResponse.Content)
-                {
-                    content.Annotations["componentId"] = componentId;
-                    content.Annotations["nickName"] = obj.NickName ?? string.Empty;
-                    content.Annotations["controlMode"] = controlMode;
-                    content.Annotations["viewPreset"] = viewPreset ?? string.Empty;
-                    content.Annotations["step"] = step ?? string.Empty;
-                    content.Annotations["azimuthDegrees"] = appliedAzimuth;
-                    content.Annotations["elevationDegrees"] = appliedElevation;
-                    content.Annotations["cameraTarget"] = new { x = target.X, y = target.Y, z = target.Z };
-                    content.Annotations["cameraLocation"] = new { x = cameraLocation.X, y = cameraLocation.Y, z = cameraLocation.Z };
-                    content.Annotations["bounds"] = new
-                    {
-                        min = new { x = bounds.Min.X, y = bounds.Min.Y, z = bounds.Min.Z },
-                        max = new { x = bounds.Max.X, y = bounds.Max.Y, z = bounds.Max.Z },
-                    };
-                }
-
-                return new Dictionary<string, object?>
+                return McpExtensions.CreateImageResult(png, new Dictionary<string, object?>
                 {
                     ["success"] = true,
                     ["componentId"] = componentId,
@@ -325,8 +287,13 @@ public static class ViewportTools
                     ["cameraTarget"] = new { x = target.X, y = target.Y, z = target.Z },
                     ["cameraLocation"] = new { x = cameraLocation.X, y = cameraLocation.Y, z = cameraLocation.Z },
                     ["fitToBounds"] = fitToBounds,
-                    ["capture"] = imageResponse,
-                };
+                    ["bounds"] = new
+                    {
+                        min = new { x = bounds.Min.X, y = bounds.Min.Y, z = bounds.Min.Z },
+                        max = new { x = bounds.Max.X, y = bounds.Max.Y, z = bounds.Max.Z },
+                    },
+                    ["capture"] = metadata,
+                });
                 }
                 finally
                 {
@@ -366,9 +333,9 @@ public static class ViewportTools
 
     private static void ValidateDimensions(int width, int height)
     {
-        if (width < 64 || width > 8192 || height < 64 || height > 8192)
+        if (width < 64 || width > 2576 || height < 64 || height > 2576)
         {
-            throw new ArgumentOutOfRangeException(nameof(width), "Width and height must be between 64 and 8192 pixels.");
+            throw new ArgumentOutOfRangeException(nameof(width), "Width and height must be between 64 and 2576 pixels (larger images exceed model image limits).");
         }
     }
 
@@ -427,7 +394,14 @@ public static class ViewportTools
         }
     }
 
-    private static string WriteCaptureToDisk(Bitmap bitmap, RhinoView view, int quality)
+    private static byte[] EncodePng(Bitmap bitmap)
+    {
+        using var stream = new MemoryStream();
+        bitmap.Save(stream, ImageFormat.Png);
+        return stream.ToArray();
+    }
+
+    private static string WriteCaptureToDisk(byte[] png, RhinoView view)
     {
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -444,9 +418,7 @@ public static class ViewportTools
 
         try
         {
-            // In .NET 8, ImageCodecInfo has compatibility issues, so we use direct Save with format
-            // Quality parameter is only relevant for JPEG, PNG is lossless
-            bitmap.Save(filePath, ImageFormat.Png);
+            File.WriteAllBytes(filePath, png);
 
             RhinoApp.WriteLine($"[CaptureViewport] Saved capture to {filePath}");
         }
