@@ -3,8 +3,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ModelContextProtocol.Protocol;
@@ -26,6 +29,17 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     private static readonly TimeSpan RequestBodyTimeout = TimeSpan.FromSeconds(30);
     private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name";
     private static readonly object ServerCapabilities = new { tools = new { }, prompts = new { } };
+    private const string MetaVersionKey = "io.modelcontextprotocol/protocolVersion";
+    private const string MetaCapabilitiesKey = "io.modelcontextprotocol/clientCapabilities";
+    private const string ServerInfoMetaKey = "io.modelcontextprotocol/serverInfo";
+    private const string LastLegacyVersion = "2025-11-25";
+    private const string ModernVersion = "2026-07-28";
+    private static readonly string[] SupportedVersions = { ModernVersion, "2025-06-18" };
+    private static readonly Regex DateRx = new(@"^\d{4}-\d{2}-\d{2}$");
+    private static readonly HashSet<string> ModernMethods = new(StringComparer.Ordinal)
+    {
+        "server/discover", "tools/list", "tools/call", "prompts/list", "prompts/get"
+    };
 
     private readonly System.Net.HttpListener _listener = new();
     private readonly McpServerOptions _options;
@@ -534,6 +548,8 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         if (sessionId is not null)
             _sessions.TryGetValue(sessionId, out session);
 
+        var protocolHeader = context.Request.Headers["MCP-Protocol-Version"];
+
         // parse JSON‑RPC messages (supports arrays, single objects, or JSONL sequences)
         List<JsonRpcMessage> messages;
         using var requestBodyCts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -557,10 +573,27 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             context.Response.Close();
             return;
         }
+        catch (NullRequestIdException) when (IsModernHeader(protocolHeader))
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+            return;
+        }
         catch (JsonException)
         {
+            if (IsModernHeader(protocolHeader))
+            {
+                await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32700, "Parse error")).ConfigureAwait(false);
+                return;
+            }
+
             context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
             context.Response.Close();
+            return;
+        }
+
+        if (IsModern(messages, protocolHeader))
+        {
+            await HandleModernPostAsync(context, messages, protocolHeader).ConfigureAwait(false);
             return;
         }
 
@@ -683,6 +716,215 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
     }
 
+    private static bool IsModern(IReadOnlyList<JsonRpcMessage> messages, string? header)
+    {
+        if (messages.Any(m => m is JsonRpcRequest { Method: "initialize" }))
+            return false;
+        if (messages.Any(m => MetaVersion(m) is not null))
+            return true;
+        return IsModernHeader(header);
+    }
+
+    private static bool IsModernHeader(string? header) =>
+        header is not null && DateRx.IsMatch(header) && string.CompareOrdinal(header, LastLegacyVersion) > 0;
+
+    private static JsonObject? MetaOf(JsonRpcMessage message) =>
+        ((message as JsonRpcRequest)?.Params ?? (message as JsonRpcNotification)?.Params) is JsonObject p
+            ? p["_meta"] as JsonObject
+            : null;
+
+    private static string? MetaVersion(JsonRpcMessage message) => StringOf(MetaOf(message), MetaVersionKey);
+
+    private static string? StringOf(JsonObject? obj, string key) =>
+        obj?[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    private static bool IsPrintableAscii(string value) => value.All(c => c >= 0x20 && c <= 0x7E);
+
+    /// <summary>Decodes an <c>=?base64?...?=</c> header value; null when the value is invalid.</summary>
+    private static string? DecodeHeader(string? value)
+    {
+        if (value is null)
+            return null;
+        if (!value.StartsWith("=?base64?", StringComparison.Ordinal) || !value.EndsWith("?=", StringComparison.Ordinal) || value.Length < 11)
+            return IsPrintableAscii(value) ? value : null;
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(value.Substring(9, value.Length - 11)));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string ErrorJson(int code, string message) =>
+        JsonSerializer.Serialize(new { jsonrpc = "2.0", error = new { code, message } });
+
+    private static async Task WriteModernAsync(HttpListenerContext context, HttpStatusCode status, string? json)
+    {
+        var body = json is null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(json);
+        try
+        {
+            context.Response.StatusCode = (int)status;
+            context.Response.ContentType = "application/json";
+            SetCorsOrigin(context.Response, context.Request.Headers["Origin"]);
+            context.Response.ContentLength64 = body.Length;
+            await context.Response.OutputStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
+            context.Response.Close();
+        }
+        catch (Exception ex) when (ex is HttpListenerException or IOException or ObjectDisposedException)
+        {
+            // Client disconnected before the response was written.
+        }
+    }
+
+    /// <summary>
+    /// Handles MCP 2026-07-28 POSTs: stateless, per-request validation, JSON responses only.
+    /// </summary>
+    private async Task HandleModernPostAsync(
+        HttpListenerContext context,
+        List<JsonRpcMessage> messages,
+        string? protocolHeader)
+    {
+        async Task Reject(HttpStatusCode status, RequestId id, int code, string message, object? data = null)
+        {
+            JsonRpcMessage error = new JsonRpcError
+            {
+                Id = id,
+                Error = new JsonRpcErrorDetail { Code = code, Message = message, Data = data }
+            };
+            await WriteModernAsync(context, status, JsonSerializer.Serialize(error)).ConfigureAwait(false);
+        }
+
+        if (messages.Count != 1)
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+            return;
+        }
+
+        if (messages[0] is JsonRpcNotification)
+        {
+            MessageReceived?.Invoke(messages[0]);
+            await WriteModernAsync(context, HttpStatusCode.Accepted, null).ConfigureAwait(false);
+            return;
+        }
+
+        if (messages[0] is not JsonRpcRequest request)
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(protocolHeader))
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Missing required header", "MCP-Protocol-Version").ConfigureAwait(false);
+            return;
+        }
+
+        var metaVersion = MetaVersion(request);
+        if (metaVersion is null)
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32602, "Invalid params", "_meta.protocolVersion").ConfigureAwait(false);
+            return;
+        }
+
+        if (!string.Equals(protocolHeader, metaVersion, StringComparison.Ordinal))
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Header mismatch", "MCP-Protocol-Version").ConfigureAwait(false);
+            return;
+        }
+
+        if (metaVersion != ModernVersion)
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32022, "Unsupported protocol version",
+                new { supported = SupportedVersions, requested = metaVersion }).ConfigureAwait(false);
+            return;
+        }
+
+        if (MetaOf(request)?[MetaCapabilitiesKey] is not JsonObject)
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32602, "Invalid params", "_meta.clientCapabilities").ConfigureAwait(false);
+            return;
+        }
+
+        var methodHeader = context.Request.Headers["Mcp-Method"];
+        if (methodHeader is null || methodHeader != request.Method || !IsPrintableAscii(methodHeader))
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Header mismatch", "Mcp-Method").ConfigureAwait(false);
+            return;
+        }
+
+        string? nameKey = request.Method switch
+        {
+            "tools/call" or "prompts/get" => "name",
+            "resources/read" => "uri",
+            _ => null
+        };
+        if (nameKey is not null)
+        {
+            var mcpName = DecodeHeader(context.Request.Headers["Mcp-Name"]);
+            if (mcpName is null || mcpName != StringOf(request.Params as JsonObject, nameKey))
+            {
+                await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Header mismatch", "Mcp-Name").ConfigureAwait(false);
+                return;
+            }
+        }
+
+        if (!ModernMethods.Contains(request.Method))
+        {
+            var notFound = CreateUnknownMethodError(request.Id, request.Method);
+            await WriteModernAsync(context, HttpStatusCode.NotFound, JsonSerializer.Serialize(notFound)).ConfigureAwait(false);
+            return;
+        }
+
+        JsonRpcMessage response;
+        try
+        {
+            response = await DispatchAsync(request, modern: true).ConfigureAwait(false);
+            MessageReceived?.Invoke(request);
+        }
+        catch (Exception ex)
+        {
+            WriteDebugLog($"[MCP ERROR] Modern request failed: {ex}");
+            response = CreateErrorResponse(request.Id, -32603, "Internal error", ex.Message);
+        }
+
+        await WriteModernAsync(context, HttpStatusCode.OK, JsonSerializer.Serialize(DecorateModern(response, request.Method)))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Adds the 2026-07-28 result fields. Error responses are returned unchanged.
+    /// </summary>
+    private JsonRpcMessage DecorateModern(JsonRpcMessage message, string method)
+    {
+        if (message is not JsonRpcResponse { Result: JsonObject result })
+            return message;
+
+        result["resultType"] = "complete";
+        if (method is "server/discover" or "tools/list" or "prompts/list")
+        {
+            result["ttlMs"] = 0;
+            result["cacheScope"] = "public";
+        }
+
+        if (_options.ServerInfo is { } info)
+        {
+            if (result["_meta"] is not JsonObject meta)
+            {
+                meta = new JsonObject();
+                result["_meta"] = meta;
+            }
+
+            var serverInfo = new JsonObject { ["name"] = info.Name, ["version"] = info.Version };
+            if (info.Title is not null)
+                serverInfo["title"] = info.Title;
+            meta[ServerInfoMetaKey] = serverInfo;
+        }
+
+        return message;
+    }
+
     private static async Task<List<JsonRpcMessage>> ParseJsonRpcMessagesAsync(
         Stream input,
         int maxBytes,
@@ -717,6 +959,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             {
                 foreach (var el in root.EnumerateArray())
                 {
+                    ThrowIfNullId(el);
                     if (el.Deserialize<JsonRpcMessage>() is { } msg)
                     {
                         messages.Add(msg);
@@ -725,6 +968,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             }
             else
             {
+                ThrowIfNullId(root);
                 if (root.Deserialize<JsonRpcMessage>() is { } msg)
                 {
                     messages.Add(msg);
@@ -733,6 +977,20 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
 
         return messages;
+    }
+
+    private static void ThrowIfNullId(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty("id", out var id)
+            && id.ValueKind == JsonValueKind.Null)
+        {
+            throw new NullRequestIdException();
+        }
+    }
+
+    private sealed class NullRequestIdException : JsonException
+    {
     }
 
     private static async Task CopyToAsyncWithCancellation(
@@ -818,6 +1076,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         return request.Method switch
         {
             "initialize" when !modern => await HandleInitializeRequest(request),
+            "server/discover" when modern => HandleDiscoverRequest(request),
             "tools/list" => await HandleToolsListRequest(request),
             "tools/call" => await HandleToolCallRequest(request),
             "prompts/list" => await HandlePromptsListRequest(request),
@@ -859,6 +1118,23 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         };
 
         return response;
+    }
+
+    /// <summary>
+    /// Handles server/discover (MCP 2026-07-28).
+    /// </summary>
+    private JsonRpcResponse HandleDiscoverRequest(JsonRpcRequest request)
+    {
+        var result = new JsonObject
+        {
+            ["supportedVersions"] = JsonSerializer.SerializeToNode(SupportedVersions),
+            ["capabilities"] = JsonSerializer.SerializeToNode(ServerCapabilities)
+        };
+
+        if (_options.ServerInstructions is { } instructions)
+            result["instructions"] = instructions;
+
+        return new JsonRpcResponse { Id = request.Id, Result = result };
     }
 
     /// <summary>
