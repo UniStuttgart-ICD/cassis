@@ -10,6 +10,8 @@ using Cassis.Extensions;
 using Cassis.Models;
 using Cassis.Services;
 using Cassis.Utilities;
+using Grasshopper;
+using Grasshopper.Kernel;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Rhino;
@@ -93,12 +95,20 @@ public static class ViewportTools
         [Description("Include world axes in the capture")] bool includeAxes = false,
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
+        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
+        [Description("Optional GH object GUIDs: temporarily zoom to their preview for this capture only (camera restored afterwards, selection unchanged)")] string[]? componentIds = null,
+        [Description("Temporarily zoom extents for this capture only (camera restored afterwards)")] bool zoomExtents = false)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
             ValidateDimensions(width, height);
             ValidateQuality(quality);
+
+            var frameComponents = componentIds != null && componentIds.Length > 0;
+            if (frameComponents && zoomExtents)
+            {
+                throw new ArgumentException("Use componentIds or zoomExtents, not both");
+            }
 
             var captureResult = await UiThreadHelper.InvokeAsync(() =>
             {
@@ -110,22 +120,113 @@ public static class ViewportTools
                     throw new ArgumentException($"Unable to locate {name}");
                 }
 
-                view.Redraw();
-                using var bitmap = CaptureBitmap(view, width, height, includeGrid, includeAxes, transparentBackground);
-                if (bitmap == null)
+                var viewport = view.ActiveViewport;
+                var framed = frameComponents || zoomExtents;
+                ComponentFocusHelper.FocusSet? focus = null;
+                if (framed)
                 {
-                    throw new InvalidOperationException("Viewport capture returned no bitmap. Try lowering resolution or using the simple capture tool.");
+                    viewport.PushViewProjection();
                 }
 
-                var png = EncodePng(bitmap);
-                var capturePath = WriteCaptureToDisk(png, view);
-                var metadata = BuildMetadata(view, bitmap, capturePath);
-                ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
-                return McpExtensions.CreateImageResult(png, metadata);
+                try
+                {
+                    if (frameComponents)
+                    {
+                        focus = ComponentFocusHelper.Resolve(ActiveGhDocument(), componentIds!);
+                        ComponentFocusHelper.Zoom([view], focus.Bounds, ComponentFocusHelper.DefaultPadding);
+                    }
+                    else if (zoomExtents)
+                    {
+                        viewport.ZoomExtents();
+                    }
+
+                    view.Redraw();
+                    using var bitmap = CaptureBitmap(view, width, height, includeGrid, includeAxes, transparentBackground);
+                    if (bitmap == null)
+                    {
+                        throw new InvalidOperationException("Viewport capture returned no bitmap. Try lowering resolution or using the simple capture tool.");
+                    }
+
+                    var png = EncodePng(bitmap);
+                    var capturePath = WriteCaptureToDisk(png, view);
+                    var metadata = BuildMetadata(view, bitmap, capturePath);
+                    metadata.Framing = frameComponents ? "components" : zoomExtents ? "extents" : null;
+                    metadata.NotFound = focus?.NotFound.Count > 0 ? focus.NotFound : null;
+                    metadata.NoPreview = focus?.NoPreview.Count > 0 ? focus.NoPreview : null;
+                    ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
+                    return McpExtensions.CreateImageResult(png, metadata);
+                }
+                finally
+                {
+                    if (framed)
+                    {
+                        viewport.PopViewProjection();
+                        view.Redraw();
+                    }
+                }
             });
 
             return captureResult;
         }, nameof(CaptureViewport));
+    }
+
+    [McpServerTool(Name = "Focus_Components")]
+    [Description(
+        "Selects Grasshopper objects by GUID (their preview turns the selection colour) and zooms Rhino viewports to their preview geometry. " +
+        "Changes the canvas selection and the camera; call Capture_Viewport afterwards to see the result.")]
+    public static async Task<CallToolResult> FocusComponents(
+        [Description("Grasshopper object GUIDs to focus")] string[] componentIds,
+        [Description("Viewport names to zoom; omit for the active viewport, [\"*\"] for all viewports")] string[]? viewports = null,
+        [Description("Replace the canvas selection with these objects so their preview is highlighted")] bool select = true,
+        [Description("Zoom the viewports to the objects' preview bounds")] bool zoom = true,
+        [Description("Margin around the bounds as a fraction of their diagonal")] double padding = ComponentFocusHelper.DefaultPadding)
+    {
+        return await McpExtensions.SafeExecuteAsync(async () =>
+        {
+            if (componentIds == null || componentIds.Length == 0)
+            {
+                throw new ArgumentException("componentIds must contain at least one GUID");
+            }
+
+            McpExtensions.ValidateRange(nameof(padding), padding, 0, 10);
+
+            return await UiThreadHelper.InvokeAsync<object>(() =>
+            {
+                var doc = RhinoDoc.ActiveDoc ?? throw new InvalidOperationException("No active Rhino document found");
+                var ghDoc = ActiveGhDocument();
+                var views = zoom ? ResolveViews(doc, viewports) : new List<RhinoView>();
+                var focus = ComponentFocusHelper.Resolve(ghDoc, componentIds);
+
+                if (select)
+                {
+                    ComponentFocusHelper.Select(ghDoc, focus.Found);
+                }
+
+                if (zoom)
+                {
+                    ComponentFocusHelper.Zoom(views, focus.Bounds, padding);
+                }
+
+                doc.Views.Redraw();
+
+                return new
+                {
+                    success = true,
+                    focused = focus.Found.Select(o => new
+                    {
+                        id = o.InstanceGuid.ToString(),
+                        nick = o.NickName ?? string.Empty,
+                        previewHidden = o is IGH_PreviewObject p && p.Hidden,
+                    }).ToList(),
+                    notFound = focus.NotFound,
+                    noPreview = focus.NoPreview,
+                    bounds = BoundsJson(focus.Bounds),
+                    viewports = views.Select(v => v.MainViewport?.Name).ToList(),
+                    selected = select,
+                    zoomed = zoom,
+                };
+            });
+        }, nameof(FocusComponents));
     }
 
     [McpServerTool(Name = "Orbit_Object")]
@@ -287,11 +388,7 @@ public static class ViewportTools
                     ["cameraTarget"] = new { x = target.X, y = target.Y, z = target.Z },
                     ["cameraLocation"] = new { x = cameraLocation.X, y = cameraLocation.Y, z = cameraLocation.Z },
                     ["fitToBounds"] = fitToBounds,
-                    ["bounds"] = new
-                    {
-                        min = new { x = bounds.Min.X, y = bounds.Min.Y, z = bounds.Min.Z },
-                        max = new { x = bounds.Max.X, y = bounds.Max.Y, z = bounds.Max.Z },
-                    },
+                    ["bounds"] = BoundsJson(bounds),
                     ["capture"] = metadata,
                 });
                 }
@@ -357,6 +454,32 @@ public static class ViewportTools
         return doc.Views.FirstOrDefault(view =>
             string.Equals(view.MainViewport?.Name, viewportName, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static List<RhinoView> ResolveViews(RhinoDoc doc, string[]? viewportNames)
+    {
+        if (viewportNames == null || viewportNames.Length == 0)
+        {
+            return [ResolveViewport(doc, null) ?? throw new ArgumentException("Unable to locate active viewport")];
+        }
+
+        if (viewportNames.Contains("*"))
+        {
+            return doc.Views.ToList();
+        }
+
+        return viewportNames
+            .Select(name => ResolveViewport(doc, name) ?? throw new ArgumentException($"Unable to locate viewport '{name}'"))
+            .ToList();
+    }
+
+    private static object BoundsJson(BoundingBox bounds) => new
+    {
+        min = new { x = bounds.Min.X, y = bounds.Min.Y, z = bounds.Min.Z },
+        max = new { x = bounds.Max.X, y = bounds.Max.Y, z = bounds.Max.Z },
+    };
+
+    private static GH_Document ActiveGhDocument() =>
+        Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
     private static Bitmap? CaptureBitmap(RhinoView view, int width, int height, bool includeGrid, bool includeAxes, bool transparent)
     {

@@ -119,6 +119,15 @@ public sealed class ViewportCaptureMetadata
 
     [JsonPropertyName("filePath")]
     public string FilePath { get; set; } = string.Empty;
+
+    [JsonPropertyName("framing")]
+    public string? Framing { get; set; }
+
+    [JsonPropertyName("notFound")]
+    public List<string>? NotFound { get; set; }
+
+    [JsonPropertyName("noPreview")]
+    public List<string>? NoPreview { get; set; }
 }
 
 /// <summary>
