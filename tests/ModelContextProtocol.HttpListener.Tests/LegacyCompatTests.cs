@@ -242,6 +242,22 @@ public sealed class LegacyCompatTests
         });
     }
 
+    [Test]
+    public async Task L15_AsyncThrowingToolReturnsServerErrorToday()
+    {
+        await WithTransportAsync(async (prefix, client) =>
+        {
+            var response = await PostAsync(client, prefix,
+                Rpc(12, "tools/call", """{"name":"throwsasync","arguments":{}}"""), ProtocolHeader);
+
+            using var json = ParseSseData(response.Body);
+            Assert.That(json.RootElement.TryGetProperty("result", out _), Is.False);
+            var error = json.RootElement.GetProperty("error");
+            Assert.That(error.GetProperty("code").GetInt32(), Is.EqualTo(-32000));
+            Assert.That(error.GetProperty("message").GetString(), Does.Contain("async boom"));
+        });
+    }
+
     private static string Rpc(int id, string method, string paramsJson = "{}") =>
         $$"""{"jsonrpc":"2.0","id":{{id}},"method":"{{method}}","params":{{paramsJson}}}""";
 

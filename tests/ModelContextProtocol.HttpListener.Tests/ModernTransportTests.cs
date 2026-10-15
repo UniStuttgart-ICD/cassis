@@ -108,6 +108,84 @@ public sealed class ModernTransportTests
     }
 
     [Test]
+    public async Task M5_RichResultKeepsIsError()
+    {
+        await WithTransportAsync(Options, async (prefix, client) =>
+        {
+            var reply = await ModernPostAsync(client, prefix, "tools/call", """{"name":"richresult","arguments":{}}""");
+
+            Assert.That(reply.Status, Is.EqualTo(HttpStatusCode.OK));
+            using var doc = JsonDocument.Parse(reply.Body);
+            var result = doc.RootElement.GetProperty("result");
+            Assert.That(result.GetProperty("isError").GetBoolean(), Is.True);
+            Assert.That(result.GetProperty("content")[0].GetProperty("text").GetString(), Is.EqualTo("rich failure"));
+            Assert.That(result.GetProperty("content")[0].GetProperty("type").GetString(), Is.EqualTo("text"));
+            Assert.That(result.GetProperty("resultType").GetString(), Is.EqualTo("complete"));
+        });
+    }
+
+    [Test]
+    public async Task M5b_StructuredContentSurvives()
+    {
+        await WithTransportAsync(Options, async (prefix, client) =>
+        {
+            var reply = await ModernPostAsync(client, prefix, "tools/call", """{"name":"structured","arguments":{}}""");
+
+            Assert.That(reply.Status, Is.EqualTo(HttpStatusCode.OK));
+            using var doc = JsonDocument.Parse(reply.Body);
+            var result = doc.RootElement.GetProperty("result");
+            Assert.That(result.GetProperty("structuredContent").GetProperty("answer").GetInt32(), Is.EqualTo(42));
+        });
+    }
+
+    [Test]
+    public async Task M6_ThrowingToolBecomesIsErrorResult()
+    {
+        await WithTransportAsync(Options, async (prefix, client) =>
+        {
+            var reply = await ModernPostAsync(client, prefix, "tools/call", """{"name":"throws","arguments":{}}""");
+
+            AssertToolError(reply, "fixture boom");
+        });
+    }
+
+    [Test]
+    public async Task M6b_AsyncThrowingToolBecomesIsErrorResult()
+    {
+        await WithTransportAsync(Options, async (prefix, client) =>
+        {
+            var reply = await ModernPostAsync(client, prefix, "tools/call", """{"name":"throwsasync","arguments":{}}""");
+
+            AssertToolError(reply, "async boom");
+        });
+    }
+
+    [Test]
+    public async Task M7_UnknownToolOrPromptIsInvalidParams()
+    {
+        await WithTransportAsync(Options, async (prefix, client) =>
+        {
+            var tool = await ModernPostAsync(client, prefix, "tools/call", """{"name":"nosuchtool","arguments":{}}""");
+            AssertJsonRpcError(tool, HttpStatusCode.OK, -32602);
+
+            var prompt = await ModernPostAsync(client, prefix, "prompts/get", """{"name":"nosuchprompt","arguments":{}}""");
+            AssertJsonRpcError(prompt, HttpStatusCode.OK, -32602);
+        });
+    }
+
+    [Test]
+    public async Task M7b_BadArgumentTypeIsInvalidParams()
+    {
+        await WithTransportAsync(Options, async (prefix, client) =>
+        {
+            var reply = await ModernPostAsync(client, prefix, "tools/call",
+                """{"name":"echo","arguments":{"text":{"nested":true}}}""");
+
+            AssertJsonRpcError(reply, HttpStatusCode.OK, -32602);
+        });
+    }
+
+    [Test]
     public async Task M8a_PromptsListAndGetUseModernPath()
     {
         await WithTransportAsync(Options, async (prefix, client) =>
@@ -394,6 +472,16 @@ public sealed class ModernTransportTests
 
     private static string? ServerInfoName(JsonElement result) =>
         result.GetProperty("_meta").GetProperty("io.modelcontextprotocol/serverInfo").GetProperty("name").GetString();
+
+    private static void AssertToolError(Reply reply, string text)
+    {
+        Assert.That(reply.Status, Is.EqualTo(HttpStatusCode.OK));
+        using var doc = JsonDocument.Parse(reply.Body);
+        Assert.That(doc.RootElement.TryGetProperty("error", out _), Is.False);
+        var result = doc.RootElement.GetProperty("result");
+        Assert.That(result.GetProperty("isError").GetBoolean(), Is.True);
+        Assert.That(result.GetProperty("content")[0].GetProperty("text").GetString(), Does.Contain(text));
+    }
 
     private static void AssertJsonRpcError(Reply reply, HttpStatusCode status, int code)
     {

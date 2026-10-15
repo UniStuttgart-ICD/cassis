@@ -1078,9 +1078,9 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             "initialize" when !modern => await HandleInitializeRequest(request),
             "server/discover" when modern => HandleDiscoverRequest(request),
             "tools/list" => await HandleToolsListRequest(request),
-            "tools/call" => await HandleToolCallRequest(request),
+            "tools/call" => await HandleToolCallRequest(request, modern),
             "prompts/list" => await HandlePromptsListRequest(request),
-            "prompts/get" => await HandlePromptGetRequest(request),
+            "prompts/get" => await HandlePromptGetRequest(request, modern),
             "resources/list" when !modern => await HandleResourcesListRequest(request),
             "resources/read" when !modern => await HandleResourceReadRequest(request),
             "ping" when !modern => new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { }) },
@@ -1242,7 +1242,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles tools/call request by invoking the specified tool.
     /// </summary>
-    private async Task<JsonRpcMessage> HandleToolCallRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandleToolCallRequest(JsonRpcRequest request, bool modern)
     {
         try
         {
@@ -1258,7 +1258,9 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 return CreateErrorResponse(request.Id, -32602, "Invalid params", "Missing tool name");
 
             if (!_toolMethods.TryGetValue(toolNameLower, out var method))
-                return CreateErrorResponse(request.Id, -32601, "Not found", $"Tool '{toolNameLower}' not found");
+                return modern
+                    ? CreateErrorResponse(request.Id, -32602, "Invalid params", $"Unknown tool: {toolNameLower}")
+                    : CreateErrorResponse(request.Id, -32601, "Not found", $"Tool '{toolNameLower}' not found");
 
             var argMap = toolParams.Arguments ?? new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.OrdinalIgnoreCase);
 
@@ -1273,7 +1275,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 if (p.ParameterType.IsInterface && p.ParameterType.Name.StartsWith("I"))
                 {
                     if (_serviceProvider == null)
-                        return CreateErrorResponse(request.Id, -32000, "Server error", "Service provider not available");
+                        return CreateServerError(request.Id, modern, "Service provider not available");
                     invokeArgs[i] = _serviceProvider.GetService(p.ParameterType);
                     continue;
                 }
@@ -1281,7 +1283,14 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 var paramName = p.Name!;
                 if (argMap.TryGetValue(paramName, out var elem))
                 {
-                    invokeArgs[i] = elem.Deserialize(p.ParameterType, McpJsonUtilities.DefaultOptions);
+                    try
+                    {
+                        invokeArgs[i] = elem.Deserialize(p.ParameterType, McpJsonUtilities.DefaultOptions);
+                    }
+                    catch (JsonException ex) when (modern)
+                    {
+                        return CreateErrorResponse(request.Id, -32602, "Invalid params", ex.Message);
+                    }
                 }
                 else if (p.HasDefaultValue)
                 {
@@ -1293,30 +1302,48 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 }
             }
 
-            var resultObj = method.Invoke(null, invokeArgs);
+            object? resultObj;
+            try
+            {
+                resultObj = method.Invoke(null, invokeArgs);
+                if (resultObj is Task pending)
+                {
+                    await pending.ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (modern)
+            {
+                var failure = (ex as TargetInvocationException)?.InnerException ?? ex;
+                return new JsonRpcResponse
+                {
+                    Id = request.Id,
+                    Result = JsonSerializer.SerializeToNode(new
+                    {
+                        content = new[] { new { type = "text", text = failure.Message } },
+                        isError = true
+                    })
+                };
+            }
+
             if (resultObj is Task task)
             {
-                await task.ConfigureAwait(false);
-                var taskType = task.GetType();
-                if (taskType.IsGenericType)
+                if (!task.GetType().IsGenericType)
                 {
-                    var resultProperty = taskType.GetProperty("Result");
-                    var taskResult = resultProperty?.GetValue(task);
-                    
-                    // Handle CallToolResult properly using reflection
-                    if (taskResult != null && taskResult.GetType().Name == "CallToolResult")
+                    return new JsonRpcResponse
                     {
-                        var contentProperty = taskResult.GetType().GetProperty("Content");
-                        if (contentProperty != null)
-                        {
-                            var content = contentProperty.GetValue(taskResult);
-                            return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content }) };
-                        }
-                    }
-                    
-                    return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content = taskResult }) };
+                        Id = request.Id,
+                        Result = modern
+                            ? JsonSerializer.SerializeToNode(new { content = Array.Empty<object>() })
+                            : JsonSerializer.SerializeToNode(new { success = true })
+                    };
                 }
-                return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { success = true }) };
+
+                resultObj = task.GetType().GetProperty("Result")?.GetValue(task);
+            }
+
+            if (modern)
+            {
+                return new JsonRpcResponse { Id = request.Id, Result = ModernToolResult(resultObj) };
             }
 
             // Handle CallToolResult properly using reflection
@@ -1338,9 +1365,24 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
-            return CreateErrorResponse(request.Id, -32000, "Server error", ex.Message);
+            return CreateServerError(request.Id, modern, ex.Message);
         }
     }
+
+    private static JsonNode? ModernToolResult(object? value) => value switch
+    {
+        CallToolResult result => JsonSerializer.SerializeToNode(result, McpJsonUtilities.DefaultOptions),
+        null => JsonSerializer.SerializeToNode(new { content = Array.Empty<object>() }),
+        _ => JsonSerializer.SerializeToNode(new
+        {
+            content = new[] { new { type = "text", text = value is string s ? s : JsonSerializer.Serialize(value) } }
+        })
+    };
+
+    private JsonRpcMessage CreateServerError(RequestId id, bool modern, string message) =>
+        modern
+            ? CreateErrorResponse(id, -32603, "Internal error", message)
+            : CreateErrorResponse(id, -32000, "Server error", message);
 
     private sealed class ToolCallParams
     {
@@ -1407,7 +1449,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles prompts/get request by invoking the specified prompt.
     /// </summary>
-    private async Task<JsonRpcMessage> HandlePromptGetRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandlePromptGetRequest(JsonRpcRequest request, bool modern)
     {
         try
         {
@@ -1422,7 +1464,9 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 return CreateErrorResponse(request.Id, -32602, "Invalid params", "Missing prompt name");
 
             if (!_promptMethods.TryGetValue(promptNameLower, out var method))
-                return CreateErrorResponse(request.Id, -32601, "Not found", $"Prompt '{promptNameLower}' not found");
+                return modern
+                    ? CreateErrorResponse(request.Id, -32602, "Invalid params", $"Invalid prompt name: {promptNameLower}")
+                    : CreateErrorResponse(request.Id, -32601, "Not found", $"Prompt '{promptNameLower}' not found");
 
             var argMap = promptParams.Arguments ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1436,7 +1480,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 if (p.ParameterType.IsInterface && p.ParameterType.Name.StartsWith("I"))
                 {
                     if (_serviceProvider == null)
-                        return CreateErrorResponse(request.Id, -32000, "Server error", "Service provider not available");
+                        return CreateServerError(request.Id, modern, "Service provider not available");
                     invokeArgs[i] = _serviceProvider.GetService(p.ParameterType);
                     continue;
                 }
@@ -1484,11 +1528,13 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (TargetInvocationException ex)
         {
-            return CreateErrorResponse(request.Id, -32001, "Prompt error", ex.InnerException?.Message ?? ex.Message);
+            return modern
+                ? CreateErrorResponse(request.Id, -32603, "Internal error", ex.InnerException?.Message ?? ex.Message)
+                : CreateErrorResponse(request.Id, -32001, "Prompt error", ex.InnerException?.Message ?? ex.Message);
         }
         catch (Exception ex)
         {
-            return CreateErrorResponse(request.Id, -32000, "Server error", ex.Message);
+            return CreateServerError(request.Id, modern, ex.Message);
         }
     }
 

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Nodes;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -28,6 +29,23 @@ public static class FixtureTools
     [Description("Always throws")]
     public static Task<CallToolResult> Throws() =>
         throw new InvalidOperationException("fixture boom");
+
+    [McpServerTool(Name = "throwsasync")]
+    [Description("Throws after yielding")]
+    public static async Task<CallToolResult> ThrowsAsync()
+    {
+        await Task.Yield();
+        throw new InvalidOperationException("async boom");
+    }
+
+    [McpServerTool(Name = "structured")]
+    [Description("Returns structured content")]
+    public static Task<CallToolResult> Structured() =>
+        Task.FromResult(new CallToolResult
+        {
+            Content = new List<ContentBlock> { new TextContentBlock { Text = "s" } },
+            StructuredContent = JsonNode.Parse("""{"answer":42}""")
+        });
 }
 
 [McpServerPromptType]
