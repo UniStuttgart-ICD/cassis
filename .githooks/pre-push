@@ -1,0 +1,35 @@
+#!/bin/sh
+# Blocks pushes to the public repo whose new commits fail the public-release scan.
+# Pushed history cannot be cleaned later, so check before it leaves the machine.
+# Enable once per clone: git config core.hooksPath .githooks
+
+remote_url="$2"
+case "$remote_url" in
+    *github.com*UniStuttgart-ICD/cassis*) ;;
+    *) exit 0 ;;
+esac
+
+if ! command -v pwsh >/dev/null 2>&1; then
+    echo "pre-push: pwsh not found; public-release scan skipped" >&2
+    exit 0
+fi
+
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue  # branch deletion
+
+    # Scan only commits the remote does not have yet.
+    if [ "$remote_sha" != "$zero" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+        base="$remote_sha"
+    else
+        base=$(git merge-base "$local_sha" "refs/remotes/$1/HEAD" 2>/dev/null)
+    fi
+    range="${base:+$base..}$local_sha"
+
+    echo "pre-push: scanning $local_ref ($range)" >&2
+    if ! pwsh -NoProfile -File scripts/Test-PublicRelease.ps1 -CheckHistory -HistoryRef "$range"; then
+        echo "pre-push: blocked. Fix the flagged content and amend before pushing." >&2
+        exit 1
+    fi
+done
+exit 0
