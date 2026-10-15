@@ -32,6 +32,7 @@ public static class McpExtensions
 
         return new CallToolResult
         {
+            IsError = true,
             Content =
             [
                 new TextContentBlock
@@ -67,7 +68,8 @@ public static class McpExtensions
         try
         {
             var result = await operation();
-            return CreateSuccessResult(result);
+            // Tools that build their own CallToolResult (incl. IsError) must not be re-wrapped as text.
+            return result as CallToolResult ?? CreateSuccessResult(result);
         }
         catch (ArgumentException ex)
         {

@@ -181,15 +181,34 @@ public sealed class LegacyCompatTests
     }
 
     [Test]
-    public async Task L11_RichResultDropsIsErrorToday()
+    public async Task L11_RichResultKeepsIsErrorAndContentType()
     {
         await WithTransportAsync(async (prefix, client) =>
         {
             var response = await PostAsync(client, prefix,
                 Rpc(8, "tools/call", """{"name":"richresult","arguments":{}}"""), ProtocolHeader);
 
-            Assert.That(response.Body, Does.Contain("rich failure"));
-            Assert.That(response.Body, Does.Not.Contain("isError"));
+            using var doc = ParseSseData(response.Body);
+            var result = doc.RootElement.GetProperty("result");
+            Assert.That(result.GetProperty("isError").GetBoolean(), Is.True);
+            Assert.That(result.GetProperty("content")[0].GetProperty("type").GetString(), Is.EqualTo("text"));
+            Assert.That(result.GetProperty("content")[0].GetProperty("text").GetString(), Is.EqualTo("rich failure"));
+            Assert.That(result.TryGetProperty("resultType", out _), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task L11b_StructuredContentSurvivesOnLegacy()
+    {
+        await WithTransportAsync(async (prefix, client) =>
+        {
+            var response = await PostAsync(client, prefix,
+                Rpc(9, "tools/call", """{"name":"structured","arguments":{}}"""), ProtocolHeader);
+
+            using var doc = ParseSseData(response.Body);
+            var result = doc.RootElement.GetProperty("result");
+            Assert.That(result.GetProperty("structuredContent").GetProperty("answer").GetInt32(), Is.EqualTo(42));
+            Assert.That(result.TryGetProperty("isError", out _), Is.False);
         });
     }
 

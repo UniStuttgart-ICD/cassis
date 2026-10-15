@@ -1346,15 +1346,10 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 return new JsonRpcResponse { Id = request.Id, Result = ModernToolResult(resultObj) };
             }
 
-            // Handle CallToolResult properly using reflection
-            if (resultObj != null && resultObj.GetType().Name == "CallToolResult")
+            // 2025-06-18 CallToolResult also defines isError and structuredContent; keep them.
+            if (resultObj is CallToolResult callResult)
             {
-                var contentProperty = resultObj.GetType().GetProperty("Content");
-                if (contentProperty != null)
-                {
-                    var content = contentProperty.GetValue(resultObj);
-                    return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content }) };
-                }
+                return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(callResult, McpJsonUtilities.DefaultOptions) };
             }
 
             return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content = resultObj }) };
