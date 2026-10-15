@@ -776,7 +776,8 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                     "prompts/get" => await HandlePromptGetRequest(request),
                     "resources/list" => await HandleResourcesListRequest(request),
                     "resources/read" => await HandleResourceReadRequest(request),
-                    _ => CreateErrorResponse(request.Id, -32601, "Method not found", $"Unknown method: {request.Method}")
+                    "ping" => new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { }) },
+                    _ => CreateUnknownMethodError(request.Id, request.Method)
                 };
 
                 MessageReceived?.Invoke(message);
@@ -959,7 +960,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles tools/call request by invoking the specified tool.
     /// </summary>
-    private async Task<JsonRpcResponse> HandleToolCallRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandleToolCallRequest(JsonRpcRequest request)
     {
         try
         {
@@ -1124,7 +1125,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles prompts/get request by invoking the specified prompt.
     /// </summary>
-    private async Task<JsonRpcResponse> HandlePromptGetRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandlePromptGetRequest(JsonRpcRequest request)
     {
         try
         {
@@ -1235,7 +1236,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles resources/read request.
     /// </summary>
-    private async Task<JsonRpcResponse> HandleResourceReadRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandleResourceReadRequest(JsonRpcRequest request)
     {
         return CreateErrorResponse(request.Id, -32601, "Not implemented", "Resource reading not yet implemented");
     }
@@ -1256,20 +1257,24 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Creates a JSON-RPC error response.
     /// </summary>
-    private JsonRpcResponse CreateErrorResponse(RequestId id, int code, string message, string? data = null)
+    private JsonRpcMessage CreateErrorResponse(RequestId id, int code, string message, string? data = null)
     {
-        var errorData = new
-        {
-            code,
-            message,
-            data
-        };
-
-        return new JsonRpcResponse
+        return new JsonRpcError
         {
             Id = id,
-            Result = JsonSerializer.SerializeToNode(new { error = errorData })
+            Error = new JsonRpcErrorDetail
+            {
+                Code = code,
+                Message = data is null ? message : $"{message}: {data}",
+                Data = data
+            }
         };
+    }
+
+    private JsonRpcMessage CreateUnknownMethodError(RequestId id, string method)
+    {
+        WriteDebugLog($"[MCP WARN] Unknown method: {method}");
+        return CreateErrorResponse(id, -32601, "Method not found", $"Unknown method: {method}");
     }
 
     /// <summary>

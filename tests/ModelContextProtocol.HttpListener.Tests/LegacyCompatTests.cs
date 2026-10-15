@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using NUnit.Framework;
@@ -60,7 +61,7 @@ public sealed class LegacyCompatTests
     }
 
     [Test]
-    public async Task L3_UnknownToolReturnsErrorInsideResult()
+    public async Task L3_UnknownToolReturnsTopLevelError()
     {
         await WithTransportAsync(async (prefix, client) =>
         {
@@ -69,8 +70,10 @@ public sealed class LegacyCompatTests
 
             Assert.That(response.Status, Is.EqualTo(HttpStatusCode.OK));
             Assert.That(response.Body, Does.Contain("\"code\":-32601"));
-            // Bug pinned: error sits inside "result". S2 moves it to top-level "error".
-            Assert.That(response.Body, Does.Contain("\"result\""));
+            using var json = ParseSseData(response.Body);
+            Assert.That(json.RootElement.TryGetProperty("result", out _), Is.False);
+            Assert.That(json.RootElement.GetProperty("error").GetProperty("message").GetString(),
+                Does.Contain("nosuchtool"));
         });
     }
 
@@ -118,14 +121,17 @@ public sealed class LegacyCompatTests
     }
 
     [Test]
-    public async Task L7_PingIsUnknownMethodToday()
+    public async Task L7_PingReturnsEmptyResult()
     {
         await WithTransportAsync(async (prefix, client) =>
         {
-            // Gap pinned: S2 adds ping.
             var response = await PostAsync(client, prefix, Rpc(4, "ping"), ProtocolHeader);
 
-            Assert.That(response.Body, Does.Contain("\"code\":-32601"));
+            using var json = ParseSseData(response.Body);
+            Assert.That(json.RootElement.TryGetProperty("error", out _), Is.False);
+            var result = json.RootElement.GetProperty("result");
+            Assert.That(result.ValueKind, Is.EqualTo(JsonValueKind.Object));
+            Assert.That(result.EnumerateObject().Any(), Is.False);
         });
     }
 
@@ -137,8 +143,11 @@ public sealed class LegacyCompatTests
             var response = await PostAsync(client, prefix,
                 Rpc(5, "tools/call", """{"name":"echo","arguments":{}}"""), ProtocolHeader);
 
-            Assert.That(response.Body, Does.Contain("\"code\":-32602"));
-            Assert.That(response.Body, Does.Contain("Missing required argument"));
+            using var json = ParseSseData(response.Body);
+            Assert.That(json.RootElement.TryGetProperty("result", out _), Is.False);
+            var error = json.RootElement.GetProperty("error");
+            Assert.That(error.GetProperty("code").GetInt32(), Is.EqualTo(-32602));
+            Assert.That(error.GetProperty("message").GetString(), Does.Contain("Missing required argument 'text'"));
         });
     }
 
@@ -192,8 +201,11 @@ public sealed class LegacyCompatTests
             var response = await PostAsync(client, prefix,
                 Rpc(9, "tools/call", """{"name":"throws","arguments":{}}"""), ProtocolHeader);
 
-            Assert.That(response.Body, Does.Contain("\"code\":-32001"));
-            Assert.That(response.Body, Does.Contain("fixture boom"));
+            using var json = ParseSseData(response.Body);
+            Assert.That(json.RootElement.TryGetProperty("result", out _), Is.False);
+            var error = json.RootElement.GetProperty("error");
+            Assert.That(error.GetProperty("code").GetInt32(), Is.EqualTo(-32001));
+            Assert.That(error.GetProperty("message").GetString(), Does.Contain("fixture boom"));
         });
     }
 
@@ -252,6 +264,12 @@ public sealed class LegacyCompatTests
         using var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
         return (response.StatusCode, response.Content.Headers.ContentType?.ToString(), GetSessionId(response), body);
+    }
+
+    private static JsonDocument ParseSseData(string body)
+    {
+        var data = body.Split('\n').Select(line => line.Trim()).First(line => line.StartsWith("data:", StringComparison.Ordinal));
+        return JsonDocument.Parse(data["data:".Length..]);
     }
 
     private static string? GetSessionId(HttpResponseMessage response) =>
