@@ -123,10 +123,9 @@ public static class ViewportTools
                 var viewport = view.ActiveViewport;
                 var framed = frameComponents || zoomExtents;
                 ComponentFocusHelper.FocusSet? focus = null;
-                if (framed)
-                {
-                    viewport.PushViewProjection();
-                }
+
+                // Explicit snapshot: live tests showed Push/PopViewProjection does not undo ZoomBoundingBox.
+                var savedCamera = framed ? new Rhino.DocObjects.ViewportInfo(viewport) : null;
 
                 try
                 {
@@ -158,9 +157,10 @@ public static class ViewportTools
                 }
                 finally
                 {
-                    if (framed)
+                    if (savedCamera != null)
                     {
-                        viewport.PopViewProjection();
+                        viewport.SetViewProjection(savedCamera, false);
+                        viewport.SetCameraTarget(savedCamera.TargetPoint, false);
                         view.Redraw();
                     }
                 }
