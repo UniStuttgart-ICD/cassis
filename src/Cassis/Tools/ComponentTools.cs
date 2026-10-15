@@ -1476,34 +1476,6 @@ public static class ComponentTools
     }
 
     /// <summary>
-    /// Gets information about the current Grasshopper document.
-    /// </summary>
-    [McpServerTool]
-    [Description("Gets information about the current Grasshopper document including components, file path, and modification status")]
-    public static async Task<CallToolResult> GetDocumentInfo(
-        IGrasshopperDocumentService documentService)
-    {
-        return await McpExtensions.SafeExecuteAsync(async () =>
-        {
-            McpExtensions.ValidateRequired(
-                (nameof(documentService), documentService));
-
-            var result = await documentService.GetDocumentInfoAsync();
-
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock
-                    {
-                        Text = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })
-                    }
-                ]
-            };
-        }, nameof(GetDocumentInfo));
-    }
-
-    /// <summary>
     /// Clears the current Grasshopper document while preserving essential MCP components
     /// </summary>
     [McpServerTool]
