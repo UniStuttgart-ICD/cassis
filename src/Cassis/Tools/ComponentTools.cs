@@ -50,8 +50,8 @@ public static class ComponentTools
                 (nameof(componentService), componentService),
                 (nameof(type), type));
 
-            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            CanvasPlacement.ValidateCoordinate(nameof(x), x);
+            CanvasPlacement.ValidateCoordinate(nameof(y), y);
             padding = CanvasPlacement.ValidatePadding(padding);
 
             var result = await componentService.AddComponentAsync(type, x, y, padding, avoidOverlap);
@@ -205,8 +205,8 @@ public static class ComponentTools
             McpExtensions.ValidateRequired(
                 (nameof(componentService), componentService));
 
-            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            CanvasPlacement.ValidateCoordinate(nameof(x), x);
+            CanvasPlacement.ValidateCoordinate(nameof(y), y);
             padding = CanvasPlacement.ValidatePadding(padding);
 
             var candidateNames = new[]
@@ -287,8 +287,8 @@ public static class ComponentTools
             McpExtensions.ValidateRequired(
                 (nameof(componentService), componentService));
 
-            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            CanvasPlacement.ValidateCoordinate(nameof(x), x);
+            CanvasPlacement.ValidateCoordinate(nameof(y), y);
             padding = CanvasPlacement.ValidatePadding(padding);
 
             var candidateNames = new[]
@@ -465,8 +465,8 @@ public static class ComponentTools
                 (nameof(componentService), componentService),
                 (nameof(name), name));
 
-            McpExtensions.ValidateRange(nameof(x), x, -10000, 10000);
-            McpExtensions.ValidateRange(nameof(y), y, -10000, 10000);
+            CanvasPlacement.ValidateCoordinate(nameof(x), x);
+            CanvasPlacement.ValidateCoordinate(nameof(y), y);
 
             var result = await CreateEmptyGroupAsync(name, x, y, groupColor);
 

@@ -126,18 +126,17 @@ public class CoreMcpFunctionalityValidationTests
     }
 
     [Test]
-    public async Task ComponentTools_AddComponent_Should_Reject_Invalid_Coordinates()
+    public async Task ComponentTools_AddComponent_Should_Accept_Far_Canvas_Coordinates()
     {
-        // Test adding component with extreme coordinates
         var response = await CallMcpTool("addcomponent", new
         {
             type = "Point",
-            x = 50000.0, // Beyond reasonable canvas bounds
+            x = 27000.0,
             y = 50000.0
         });
 
-        // Should handle error gracefully
         Assert.That(response, Does.Contain("data:"));
+        Assert.That(response, Does.Not.Contain("outside valid range"));
     }
 
     [Test]
@@ -457,7 +456,7 @@ public class CoreMcpFunctionalityValidationTests
         var invalidCalls = new (string, object)[]
         {
             ("addcomponent", new { type = "", x = 0.0, y = 0.0 }), // Empty type
-            ("addcomponent", new { type = "Point", x = 50000.0, y = 50000.0 }), // Invalid coordinates
+            ("addcomponent", new { type = "Point", x = 27000.0, y = 50000.0 }),
             ("setcomponentvalue", new { componentId = "invalid", parameterName = "test", value = "test" }) // Invalid component ID
         };
 

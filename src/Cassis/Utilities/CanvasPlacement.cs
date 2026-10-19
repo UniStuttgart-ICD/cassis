@@ -14,9 +14,23 @@ public static class CanvasPlacement
 {
     public const float DefaultPadding = 16f;
     public const float MaxPadding = 200f;
-    public const float CanvasLimit = 10000f;
     public const int MaxCandidates = 80;
     public const float MinStep = 20f;
+
+    /// <summary>
+    /// Canvas position is unbounded. Rejects only NaN, infinities, and values that do not fit in a Grasshopper <see cref="PointF"/>.
+    /// </summary>
+    public static void ValidateCoordinate(string paramName, double value)
+    {
+        var asFloat = (float)value;
+        if (float.IsNaN(asFloat) || float.IsInfinity(asFloat))
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName,
+                value,
+                $"Parameter '{paramName}' must be a finite canvas coordinate.");
+        }
+    }
 
     /// <summary>
     /// Validates optional padding for MCP tools.
@@ -134,7 +148,8 @@ public static class CanvasPlacement
         }
 
         var finalPivot = obj.Attributes.Pivot;
-        var outOfBounds = Math.Abs(finalPivot.X) > CanvasLimit || Math.Abs(finalPivot.Y) > CanvasLimit;
+        var outOfBounds = float.IsNaN(finalPivot.X) || float.IsInfinity(finalPivot.X)
+            || float.IsNaN(finalPivot.Y) || float.IsInfinity(finalPivot.Y);
 
         return new PlacementResult(
             requestedPivot,

@@ -181,9 +181,6 @@ namespace Cassis.Utilities
         {
             if (double.IsNaN(value) || double.IsInfinity(value))
                 return (false, $"{name} must be a finite number");
-            const double MaxCoord = 1e12;
-            if (Math.Abs(value) > MaxCoord)
-                return (false, $"{name} exceeds maximum coordinate value of {MaxCoord:E0}");
             return (true, null);
         }
 

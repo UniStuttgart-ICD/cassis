@@ -681,8 +681,6 @@ def validate_coordinates(x, y):
     try:
         x = int(x)
         y = int(y)
-        if x < -10000 or x > 10000 or y < -10000 or y > 10000:
-            return False, "Coordinates must be between -10000 and 10000"
         return True, (x, y)
     except ValueError:
         return False, "Coordinates must be valid integers"

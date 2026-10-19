@@ -41,8 +41,8 @@ public class GrasshopperComponentService : IGrasshopperComponentService
         }
 
         padding = CanvasPlacement.ValidatePadding(padding);
-        McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-        McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+        CanvasPlacement.ValidateCoordinate(nameof(x), x);
+        CanvasPlacement.ValidateCoordinate(nameof(y), y);
 
         _logger.LogInformation("Adding component: type={Type}, x={X}, y={Y}", type, x, y);
 
@@ -87,8 +87,8 @@ public class GrasshopperComponentService : IGrasshopperComponentService
         }
 
         padding = CanvasPlacement.ValidatePadding(padding);
-        McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-        McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+        CanvasPlacement.ValidateCoordinate(nameof(x), x);
+        CanvasPlacement.ValidateCoordinate(nameof(y), y);
 
         return await InvokeOnUiThreadWithDocumentAsync(
             doc =>
@@ -119,8 +119,8 @@ public class GrasshopperComponentService : IGrasshopperComponentService
         }
 
         padding = CanvasPlacement.ValidatePadding(padding);
-        McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-        McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+        CanvasPlacement.ValidateCoordinate(nameof(x), x);
+        CanvasPlacement.ValidateCoordinate(nameof(y), y);
 
         return await InvokeOnUiThreadWithDocumentAsync(
             doc =>

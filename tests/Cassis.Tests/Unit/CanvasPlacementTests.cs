@@ -104,6 +104,22 @@ public class CanvasPlacementTests
     }
 
     [Test]
+    public void ValidateCoordinate_AllowsPositionsPastTheOldCanvasBand()
+    {
+        Assert.DoesNotThrow(() => CanvasPlacement.ValidateCoordinate("x", 27000d));
+        Assert.DoesNotThrow(() => CanvasPlacement.ValidateCoordinate("y", -50000d));
+    }
+
+    [Test]
+    public void ValidateCoordinate_RejectsNonFinite()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => CanvasPlacement.ValidateCoordinate("x", double.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CanvasPlacement.ValidateCoordinate("x", double.PositiveInfinity));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CanvasPlacement.ValidateCoordinate("y", double.NegativeInfinity));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CanvasPlacement.ValidateCoordinate("x", double.MaxValue));
+    }
+
+    [Test]
     public void ValidatePadding_RejectsOutOfRange()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => CanvasPlacement.ValidatePadding(-1f));

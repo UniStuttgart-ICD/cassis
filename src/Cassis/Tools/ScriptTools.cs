@@ -791,8 +791,8 @@ public static class ScriptTools
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
-            McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
-            McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
+            CanvasPlacement.ValidateCoordinate(nameof(x), x);
+            CanvasPlacement.ValidateCoordinate(nameof(y), y);
             padding = CanvasPlacement.ValidatePadding(padding);
 
             var placementResult = await UiThreadHelper.InvokeAsync(() =>
