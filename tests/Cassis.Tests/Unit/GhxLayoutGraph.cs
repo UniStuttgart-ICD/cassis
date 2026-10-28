@@ -13,19 +13,13 @@ namespace Cassis.Tests.Unit;
 /// </summary>
 internal static class GhxLayoutGraph
 {
+    /// <summary>
+    /// Optional local .ghx path via CASSIS_LAYOUT_GHX. No default project file — CI skips.
+    /// </summary>
     public static string? ResolveFixturePath()
     {
         var env = Environment.GetEnvironmentVariable("CASSIS_LAYOUT_GHX");
-        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
-        {
-            return env;
-        }
-
-        var downloads = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Downloads",
-            "LCRL_Development_Steel_SpeckleV3.ghx");
-        return File.Exists(downloads) ? downloads : null;
+        return !string.IsNullOrWhiteSpace(env) && File.Exists(env) ? env : null;
     }
 
     public static (List<LayoutNode> Nodes, List<LayoutEdge> Edges, List<LayoutMembership> Groups)

@@ -263,13 +263,13 @@ public class CanvasLayoutTests
     }
 
     [Test]
-    public void LocalGhx_LCRL_Steel_LayoutRunsWithoutThrow()
+    public void OptionalLocalGhx_LayoutRunsWithoutThrow()
     {
-        // Local Downloads / CASSIS_LAYOUT_GHX only — never commit the .ghx.
+        // Optional: set CASSIS_LAYOUT_GHX to a local .ghx. Never commit fixtures.
         var path = GhxLayoutGraph.ResolveFixturePath();
         if (path == null)
         {
-            Assert.Ignore("Set CASSIS_LAYOUT_GHX or place LCRL_Development_Steel_SpeckleV3.ghx in Downloads.");
+            Assert.Ignore("Set CASSIS_LAYOUT_GHX to a local .ghx to run this check.");
         }
 
         var (nodes, edges, groups) = GhxLayoutGraph.Load(path!);
@@ -293,12 +293,6 @@ public class CanvasLayoutTests
         var oldCy = movable.Average(n => n.PivotY);
 
         var plan = CanvasLayout.Compute(nodes, edges, groups, proposeGroups: true);
-
-        // Optional HTML diagnose dump (set CASSIS_LAYOUT_PREVIEW=1). Does not modify the .ghx.
-        if (string.Equals(Environment.GetEnvironmentVariable("CASSIS_LAYOUT_PREVIEW"), "1", StringComparison.Ordinal))
-        {
-            WriteLayoutPreviewHtml(path!, nodes, edges, plan);
-        }
 
         Assert.That(plan.Moves.Count, Is.GreaterThan(0));
         Assert.That(plan.Moves.All(m =>
@@ -325,88 +319,8 @@ public class CanvasLayoutTests
         Assert.That(n, Is.GreaterThan(0));
         Assert.That(newCx / n, Is.EqualTo(oldCx).Within(5f));
         Assert.That(newCy / n, Is.EqualTo(oldCy).Within(5f));
-        // Compact keeps X; Y may grow when resolving stacked overlaps — reflow wraps instead.
         Assert.That((newMaxX - newMinX) / oldW, Is.LessThan(1.5f));
         Assert.That((newMaxY - newMinY) / oldH, Is.LessThan(3f));
         Assert.That(plan.GroupCandidates.All(c => c.ComponentIds.Count <= CanvasLayout.MaxCandidateSize), Is.True);
-    }
-
-    private static void WriteLayoutPreviewHtml(
-        string ghxPath,
-        IReadOnlyList<LayoutNode> nodes,
-        IReadOnlyList<LayoutEdge> edges,
-        LayoutPlan plan)
-    {
-        var byId = nodes.ToDictionary(n => n.Id);
-        var to = plan.Moves.ToDictionary(m => m.Id, m => (m.ToX, m.ToY));
-        float BeforeX(Guid id) => byId[id].PivotX;
-        float BeforeY(Guid id) => byId[id].PivotY;
-        float AfterX(Guid id) => to.TryGetValue(id, out var t) ? t.ToX : byId[id].PivotX;
-        float AfterY(Guid id) => to.TryGetValue(id, out var t) ? t.ToY : byId[id].PivotY;
-
-        string Panel(string title, Func<Guid, float> fx, Func<Guid, float> fy, float x0, out float w, out float h)
-        {
-            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
-            foreach (var n in nodes)
-            {
-                var x = fx(n.Id);
-                var y = fy(n.Id);
-                minX = Math.Min(minX, x - n.Width * 0.5f);
-                minY = Math.Min(minY, y - n.Height * 0.5f);
-                maxX = Math.Max(maxX, x + n.Width * 0.5f);
-                maxY = Math.Max(maxY, y + n.Height * 0.5f);
-            }
-
-            const float scale = 0.12f;
-            w = (maxX - minX) * scale + 40f;
-            h = (maxY - minY) * scale + 60f;
-            var sb = new System.Text.StringBuilder();
-            sb.Append($"<g transform=\"translate({x0},{0})\">");
-            sb.Append($"<text x=\"10\" y=\"24\" font-family=\"Consolas,monospace\" font-size=\"18\" font-weight=\"bold\">{title}</text>");
-            sb.Append($"<text x=\"10\" y=\"44\" font-family=\"Consolas,monospace\" font-size=\"12\" fill=\"#666\">{nodes.Count} objs · {edges.Count} edges · growth {(maxX - minX):0}/{(maxY - minY):0}</text>");
-            float MapX(float x) => 20 + (x - minX) * scale;
-            float MapY(float y) => 55 + (y - minY) * scale;
-            foreach (var e in edges)
-            {
-                if (!byId.ContainsKey(e.From) || !byId.ContainsKey(e.To))
-                {
-                    continue;
-                }
-
-                // Skip edge drawing when huge — keeps preview generation snappy.
-                if (edges.Count <= 2500)
-                {
-                    sb.Append($"<line x1=\"{MapX(fx(e.From)):0.1}\" y1=\"{MapY(fy(e.From)):0.1}\" x2=\"{MapX(fx(e.To)):0.1}\" y2=\"{MapY(fy(e.To)):0.1}\" stroke=\"#bbb\" stroke-width=\"0.4\"/>");
-                }
-            }
-
-            foreach (var n in nodes)
-            {
-                var fill = n.Frozen ? "#cde" : "#fc9";
-                var rw = Math.Max(2f, n.Width * scale);
-                var rh = Math.Max(2f, n.Height * scale);
-                sb.Append($"<rect x=\"{MapX(fx(n.Id)) - rw * 0.5f:0.1}\" y=\"{MapY(fy(n.Id)) - rh * 0.5f:0.1}\" width=\"{rw:0.1}\" height=\"{rh:0.1}\" fill=\"{fill}\" stroke=\"#333\" stroke-width=\"0.3\"/>");
-            }
-
-            sb.Append("</g>");
-            return sb.ToString();
-        }
-
-        var s1 = Panel("BEFORE", BeforeX, BeforeY, 0, out var w1, out var h1);
-        var s2 = Panel("AFTER compact (solver — .ghx untouched)", AfterX, AfterY, w1 + 20, out var w2, out var h2);
-        var html = $@"<!DOCTYPE html>
-<html><head><meta charset=utf-8><title>LCRL layout preview</title>
-<style>body{{margin:0;background:#f6f6f4;font-family:Consolas,monospace}} .note{{padding:12px 16px;color:#333}}</style>
-</head><body>
-<div class=note>From CanvasLayout.Compute (compact). Source: {System.IO.Path.GetFileName(ghxPath)}. Warnings: {string.Join(" | ", plan.Warnings)}</div>
-<svg xmlns=""http://www.w3.org/2000/svg"" width=""{w1 + w2 + 40:0}"" height=""{Math.Max(h1, h2) + 20:0}"" style=""background:#fff"">
-{s1}{s2}
-</svg></body></html>";
-        var outPath = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Downloads",
-            "LCRL_layout_preview.html");
-        System.IO.File.WriteAllText(outPath, html);
-        TestContext.Out.WriteLine(outPath);
     }
 }
