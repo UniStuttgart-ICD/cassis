@@ -1476,34 +1476,6 @@ public static class ComponentTools
     }
 
     /// <summary>
-    /// Gets information about the current Grasshopper document.
-    /// </summary>
-    [McpServerTool]
-    [Description("Gets information about the current Grasshopper document including components, file path, and modification status")]
-    public static async Task<CallToolResult> GetDocumentInfo(
-        IGrasshopperDocumentService documentService)
-    {
-        return await McpExtensions.SafeExecuteAsync(async () =>
-        {
-            McpExtensions.ValidateRequired(
-                (nameof(documentService), documentService));
-
-            var result = await documentService.GetDocumentInfoAsync();
-
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock
-                    {
-                        Text = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })
-                    }
-                ]
-            };
-        }, nameof(GetDocumentInfo));
-    }
-
-    /// <summary>
     /// Clears the current Grasshopper document while preserving essential MCP components
     /// </summary>
     [McpServerTool]
@@ -2187,11 +2159,13 @@ Canvas contains {Instances.ActiveCanvas.Document.Objects.Count()} components.
     }
 
     [McpServerTool(Name = "Set_Component_Value")]
-    [Description("Sets a value on a Grasshopper component parameter, Boolean Toggle, or Number Slider by component GUID")]
+    [Description("Sets a value by GUID and returns the value actually applied. Component input: name or NickName, stored as persistent data. " +
+                 "Number Slider: parameterName 'value' (range widens to fit) or 'InitCode' with 'min<value<max'. Boolean Toggle: true/false. Panel: text.")]
     public static async Task<CallToolResult> SetComponentValue(
-        [Description("Component GUID")] string componentId,
-        [Description("Parameter name or NickName")] string parameterName,
-        [Description("Value to set (number, boolean, or string)")] string value)
+        IGrasshopperComponentService componentService,
+        [Description("Component, slider, toggle or panel GUID")] string componentId,
+        [Description("Input name or NickName; for sliders 'value' or 'InitCode'")] string parameterName,
+        [Description("Value to set (number, boolean, string, or 'min<value<max' for InitCode)")] string value)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -2200,79 +2174,11 @@ Canvas contains {Instances.ActiveCanvas.Document.Objects.Count()} components.
                 (nameof(parameterName), parameterName),
                 (nameof(value), value));
 
-            var result = await UiThreadHelper.InvokeAsync(() =>
-            {
-                var doc = Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
+            var result = await componentService.SetComponentValueAsync(componentId, parameterName, value);
+            if (!result.Success)
+                throw new InvalidOperationException(result.ErrorMessage ?? "Value was not set");
 
-                if (!Guid.TryParse(componentId, out var guid))
-                    throw new ArgumentException("Invalid component GUID format");
-
-                var component = doc.FindObject(guid, false) ?? throw new InvalidOperationException("Component not found");
-
-                // Boolean Toggle
-                if (component is Grasshopper.Kernel.Special.GH_BooleanToggle toggle)
-                {
-                    toggle.Value = Convert.ToBoolean(value);
-                    toggle.ExpireSolution(true);
-                    doc.NewSolution(false);
-                    return new { success = true, message = $"Boolean Toggle set to {toggle.Value}" };
-                }
-
-                // IGH_Component — find input by name
-                if (component is IGH_Component ghComp)
-                {
-                    var param = ghComp.Params.Input.FirstOrDefault(p =>
-                        string.Equals(p.NickName, parameterName, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(p.Name, parameterName, StringComparison.OrdinalIgnoreCase));
-
-                    if (param != null)
-                    {
-                        param.AddVolatileData(new Grasshopper.Kernel.Data.GH_Path(0), 0, value);
-                        doc.NewSolution(false);
-                        return new { success = true, message = $"Value set on parameter '{parameterName}'" };
-                    }
-                }
-
-                // Slider — try SetSliderValue or Value property via reflection
-                if (component.GetType().Name.IndexOf("Slider", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    var compType = component.GetType();
-                    var setMethod = compType.GetMethod("SetSliderValue", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    if (setMethod != null)
-                    {
-                        var p = setMethod.GetParameters();
-                        if (p.Length == 1)
-                        {
-                            object? arg = p[0].ParameterType == typeof(decimal)
-                                ? Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture)
-                                : p[0].ParameterType == typeof(int)
-                                    ? Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture)
-                                    : (object)Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture);
-                            setMethod.Invoke(component, new[] { arg });
-                            doc.NewSolution(false);
-                            return new { success = true, message = "Slider value set" };
-                        }
-                    }
-
-                    var valueProp = compType.GetProperty("Value", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                                   ?? compType.GetProperty("CurrentValue", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    if (valueProp?.CanWrite == true)
-                    {
-                        object? converted = valueProp.PropertyType == typeof(decimal)
-                            ? Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture)
-                            : valueProp.PropertyType == typeof(int)
-                                ? Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture)
-                                : (object)Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture);
-                        valueProp.SetValue(component, converted);
-                        doc.NewSolution(false);
-                        return new { success = true, message = "Slider value set via property" };
-                    }
-                }
-
-                throw new InvalidOperationException($"Parameter '{parameterName}' not found on component");
-            });
-
-            return result;
+            return new { success = true, parameter = result.ParameterName, value = result.Value };
         }, nameof(SetComponentValue));
     }
 

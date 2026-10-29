@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Cassis.Diagnostics;
@@ -495,6 +496,10 @@ public static class CassisRuntime
         var looksLikeToolResponse = false;
         var clientInitialized = msg is JsonRpcNotification notification &&
                                 notification.Method == "notifications/initialized";
+        // 2026-07-28 clients never send notifications/initialized; any request carrying the protocol version counts.
+        var modernClient = msg is JsonRpcRequest { Params: JsonObject modernParams } &&
+                           modernParams["_meta"] is JsonObject meta &&
+                           meta.ContainsKey("io.modelcontextprotocol/protocolVersion");
 
         if (clientInitialized)
         {
@@ -543,7 +548,8 @@ public static class CassisRuntime
         {
             _lastMessageTime = ts;
             _totalMessagesReceived++;
-            _clientInitialized |= clientInitialized;
+            refresh |= modernClient && !_clientInitialized;
+            _clientInitialized |= clientInitialized || modernClient;
             if (toolNameFromRequest != null)
             {
                 _lastToolCall = ts;

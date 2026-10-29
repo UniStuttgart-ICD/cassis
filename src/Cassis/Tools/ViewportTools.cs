@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -10,6 +9,8 @@ using Cassis.Extensions;
 using Cassis.Models;
 using Cassis.Services;
 using Cassis.Utilities;
+using Grasshopper;
+using Grasshopper.Kernel;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Rhino;
@@ -27,8 +28,7 @@ public static class ViewportTools
     [McpServerTool(Name = "Capture_Viewport_Simple")]
     [Description("Compatibility alias: captures the active Rhino viewport to disk with default settings")]
     public static Task<CallToolResult> CaptureViewportSimple(
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
-        [Description("Include base64-encoded image data in the response")] bool includeBase64 = false)
+        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
     {
         // Delegate to the full-featured capture with sensible defaults
         return CaptureViewport(
@@ -39,8 +39,7 @@ public static class ViewportTools
             includeAxes: false,
             transparentBackground: false,
             quality: 90,
-            retentionSeconds: retentionSeconds,
-            includeBase64: includeBase64);
+            retentionSeconds: retentionSeconds);
     }
 
     [McpServerTool(Name = "List_Viewports")]
@@ -86,7 +85,7 @@ public static class ViewportTools
     }
 
     [McpServerTool(Name = "Capture_Viewport")]
-    [Description("Captures a Rhino viewport to disk (and optionally base64) with configurable settings")]
+    [Description("Captures a Rhino viewport and returns it as a PNG image plus JSON metadata (the PNG is also saved to disk for retentionSeconds)")]
     public static async Task<CallToolResult> CaptureViewport(
         [Description("Viewport name (optional; uses active viewport when omitted)")] string? viewportName = null,
         [Description("Output width in pixels")] int width = 1024,
@@ -96,12 +95,19 @@ public static class ViewportTools
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
         [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
-        [Description("Include base64-encoded image data in the response")] bool includeBase64 = false)
+        [Description("Optional GH object GUIDs: temporarily zoom to their preview for this capture only (camera restored afterwards, selection unchanged)")] string[]? componentIds = null,
+        [Description("Temporarily zoom extents for this capture only (camera restored afterwards)")] bool zoomExtents = false)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
             ValidateDimensions(width, height);
             ValidateQuality(quality);
+
+            var frameComponents = componentIds != null && componentIds.Length > 0;
+            if (frameComponents && zoomExtents)
+            {
+                throw new ArgumentException("Use componentIds or zoomExtents, not both");
+            }
 
             var captureResult = await UiThreadHelper.InvokeAsync(() =>
             {
@@ -113,30 +119,113 @@ public static class ViewportTools
                     throw new ArgumentException($"Unable to locate {name}");
                 }
 
-                view.Redraw();
-                using var bitmap = CaptureBitmap(view, width, height, includeGrid, includeAxes, transparentBackground);
-                if (bitmap == null)
+                var viewport = view.ActiveViewport;
+                var framed = frameComponents || zoomExtents;
+                ComponentFocusHelper.FocusSet? focus = null;
+
+                // Explicit snapshot: live tests showed Push/PopViewProjection does not undo ZoomBoundingBox.
+                var savedCamera = framed ? new Rhino.DocObjects.ViewportInfo(viewport) : null;
+
+                try
                 {
-                    throw new InvalidOperationException("Viewport capture returned no bitmap. Try lowering resolution or using the simple capture tool.");
+                    if (frameComponents)
+                    {
+                        focus = ComponentFocusHelper.Resolve(ActiveGhDocument(), componentIds!);
+                        ComponentFocusHelper.Zoom([view], focus.Bounds, ComponentFocusHelper.DefaultPadding);
+                    }
+                    else if (zoomExtents)
+                    {
+                        viewport.ZoomExtents();
+                    }
+
+                    view.Redraw();
+                    using var bitmap = CaptureBitmap(view, width, height, includeGrid, includeAxes, transparentBackground);
+                    if (bitmap == null)
+                    {
+                        throw new InvalidOperationException("Viewport capture returned no bitmap. Try lowering resolution or using the simple capture tool.");
+                    }
+
+                    var png = ImageEncoding.EncodePng(bitmap);
+                    var capturePath = WriteCaptureToDisk(png, view);
+                    var metadata = BuildMetadata(view, bitmap, capturePath);
+                    metadata.Framing = frameComponents ? "components" : zoomExtents ? "extents" : null;
+                    metadata.NotFound = focus?.NotFound.Count > 0 ? focus.NotFound : null;
+                    metadata.NoPreview = focus?.NoPreview.Count > 0 ? focus.NoPreview : null;
+                    ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
+                    return McpExtensions.CreateImageResult(png, metadata);
                 }
-
-                var capturePath = WriteCaptureToDisk(bitmap, view, quality);
-                var metadata = BuildMetadata(view, bitmap, capturePath);
-
-                string? base64 = null;
-                if (includeBase64)
+                finally
                 {
-                    using var memoryStream = new MemoryStream();
-                    bitmap.Save(memoryStream, ImageFormat.Png);
-                    base64 = Convert.ToBase64String(memoryStream.ToArray());
+                    if (savedCamera != null)
+                    {
+                        viewport.SetViewProjection(savedCamera, false);
+                        viewport.SetCameraTarget(savedCamera.TargetPoint, false);
+                        view.Redraw();
+                    }
                 }
-
-                ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
-                return ViewportCaptureResultClaude.CreateImageResponse(base64, metadata, includeBase64);
             });
 
             return captureResult;
         }, nameof(CaptureViewport));
+    }
+
+    [McpServerTool(Name = "Focus_Components")]
+    [Description(
+        "Selects Grasshopper objects by GUID (their preview turns the selection colour) and zooms Rhino viewports to their preview geometry. " +
+        "Changes the canvas selection and the camera; call Capture_Viewport afterwards to see the result.")]
+    public static async Task<CallToolResult> FocusComponents(
+        [Description("Grasshopper object GUIDs to focus")] string[] componentIds,
+        [Description("Viewport names to zoom; omit for the active viewport, [\"*\"] for all viewports")] string[]? viewports = null,
+        [Description("Replace the canvas selection with these objects so their preview is highlighted")] bool select = true,
+        [Description("Zoom the viewports to the objects' preview bounds")] bool zoom = true,
+        [Description("Margin around the bounds as a fraction of their diagonal")] double padding = ComponentFocusHelper.DefaultPadding)
+    {
+        return await McpExtensions.SafeExecuteAsync(async () =>
+        {
+            if (componentIds == null || componentIds.Length == 0)
+            {
+                throw new ArgumentException("componentIds must contain at least one GUID");
+            }
+
+            McpExtensions.ValidateRange(nameof(padding), padding, 0, 10);
+
+            return await UiThreadHelper.InvokeAsync<object>(() =>
+            {
+                var doc = RhinoDoc.ActiveDoc ?? throw new InvalidOperationException("No active Rhino document found");
+                var ghDoc = ActiveGhDocument();
+                var views = zoom ? ResolveViews(doc, viewports) : new List<RhinoView>();
+                var focus = ComponentFocusHelper.Resolve(ghDoc, componentIds);
+
+                if (select)
+                {
+                    ComponentFocusHelper.Select(ghDoc, focus.Found);
+                }
+
+                if (zoom)
+                {
+                    ComponentFocusHelper.Zoom(views, focus.Bounds, padding);
+                }
+
+                doc.Views.Redraw();
+
+                return new
+                {
+                    success = true,
+                    focused = focus.Found.Select(o => new
+                    {
+                        id = o.InstanceGuid.ToString(),
+                        nick = o.NickName ?? string.Empty,
+                        previewHidden = o is IGH_PreviewObject p && p.Hidden,
+                    }).ToList(),
+                    notFound = focus.NotFound,
+                    noPreview = focus.NoPreview,
+                    bounds = BoundsJson(focus.Bounds),
+                    viewports = views.Select(v => v.MainViewport?.Name).ToList(),
+                    selected = select,
+                    zoomed = zoom,
+                };
+            });
+        }, nameof(FocusComponents));
     }
 
     [McpServerTool(Name = "Orbit_Object")]
@@ -163,8 +252,7 @@ public static class ViewportTools
         [Description("Include world axes in the capture")] bool includeAxes = false,
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
-        [Description("Include base64-encoded image data in the response")] bool includeBase64 = false)
+        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -279,38 +367,12 @@ public static class ViewportTools
                                    ?? throw new InvalidOperationException(
                                        "Viewport capture returned no bitmap after orbiting. Try lowering resolution.");
 
-                var capturePath = WriteCaptureToDisk(bitmap, view, quality);
+                var png = ImageEncoding.EncodePng(bitmap);
+                var capturePath = WriteCaptureToDisk(png, view);
                 var metadata = BuildMetadata(view, bitmap, capturePath);
                 ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
 
-                string? base64 = null;
-                if (includeBase64)
-                {
-                    using var memoryStream = new MemoryStream();
-                    bitmap.Save(memoryStream, ImageFormat.Png);
-                    base64 = Convert.ToBase64String(memoryStream.ToArray());
-                }
-
-                var imageResponse = ViewportCaptureResultClaude.CreateImageResponse(base64, metadata, includeBase64);
-                foreach (var content in imageResponse.Content)
-                {
-                    content.Annotations["componentId"] = componentId;
-                    content.Annotations["nickName"] = obj.NickName ?? string.Empty;
-                    content.Annotations["controlMode"] = controlMode;
-                    content.Annotations["viewPreset"] = viewPreset ?? string.Empty;
-                    content.Annotations["step"] = step ?? string.Empty;
-                    content.Annotations["azimuthDegrees"] = appliedAzimuth;
-                    content.Annotations["elevationDegrees"] = appliedElevation;
-                    content.Annotations["cameraTarget"] = new { x = target.X, y = target.Y, z = target.Z };
-                    content.Annotations["cameraLocation"] = new { x = cameraLocation.X, y = cameraLocation.Y, z = cameraLocation.Z };
-                    content.Annotations["bounds"] = new
-                    {
-                        min = new { x = bounds.Min.X, y = bounds.Min.Y, z = bounds.Min.Z },
-                        max = new { x = bounds.Max.X, y = bounds.Max.Y, z = bounds.Max.Z },
-                    };
-                }
-
-                return new Dictionary<string, object?>
+                return McpExtensions.CreateImageResult(png, new Dictionary<string, object?>
                 {
                     ["success"] = true,
                     ["componentId"] = componentId,
@@ -325,8 +387,9 @@ public static class ViewportTools
                     ["cameraTarget"] = new { x = target.X, y = target.Y, z = target.Z },
                     ["cameraLocation"] = new { x = cameraLocation.X, y = cameraLocation.Y, z = cameraLocation.Z },
                     ["fitToBounds"] = fitToBounds,
-                    ["capture"] = imageResponse,
-                };
+                    ["bounds"] = BoundsJson(bounds),
+                    ["capture"] = metadata,
+                });
                 }
                 finally
                 {
@@ -366,9 +429,9 @@ public static class ViewportTools
 
     private static void ValidateDimensions(int width, int height)
     {
-        if (width < 64 || width > 8192 || height < 64 || height > 8192)
+        if (width < 64 || width > ImageEncoding.MaxEdge || height < 64 || height > ImageEncoding.MaxEdge)
         {
-            throw new ArgumentOutOfRangeException(nameof(width), "Width and height must be between 64 and 8192 pixels.");
+            throw new ArgumentOutOfRangeException(nameof(width), $"Width and height must be between 64 and {ImageEncoding.MaxEdge} pixels (larger images exceed model image limits).");
         }
     }
 
@@ -390,6 +453,32 @@ public static class ViewportTools
         return doc.Views.FirstOrDefault(view =>
             string.Equals(view.MainViewport?.Name, viewportName, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static List<RhinoView> ResolveViews(RhinoDoc doc, string[]? viewportNames)
+    {
+        if (viewportNames == null || viewportNames.Length == 0)
+        {
+            return [ResolveViewport(doc, null) ?? throw new ArgumentException("Unable to locate active viewport")];
+        }
+
+        if (viewportNames.Contains("*"))
+        {
+            return doc.Views.ToList();
+        }
+
+        return viewportNames
+            .Select(name => ResolveViewport(doc, name) ?? throw new ArgumentException($"Unable to locate viewport '{name}'"))
+            .ToList();
+    }
+
+    private static object BoundsJson(BoundingBox bounds) => new
+    {
+        min = new { x = bounds.Min.X, y = bounds.Min.Y, z = bounds.Min.Z },
+        max = new { x = bounds.Max.X, y = bounds.Max.Y, z = bounds.Max.Z },
+    };
+
+    private static GH_Document ActiveGhDocument() =>
+        Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
     private static Bitmap? CaptureBitmap(RhinoView view, int width, int height, bool includeGrid, bool includeAxes, bool transparent)
     {
@@ -427,7 +516,7 @@ public static class ViewportTools
         }
     }
 
-    private static string WriteCaptureToDisk(Bitmap bitmap, RhinoView view, int quality)
+    private static string WriteCaptureToDisk(byte[] png, RhinoView view)
     {
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -444,9 +533,7 @@ public static class ViewportTools
 
         try
         {
-            // In .NET 8, ImageCodecInfo has compatibility issues, so we use direct Save with format
-            // Quality parameter is only relevant for JPEG, PNG is lossless
-            bitmap.Save(filePath, ImageFormat.Png);
+            File.WriteAllBytes(filePath, png);
 
             RhinoApp.WriteLine($"[CaptureViewport] Saved capture to {filePath}");
         }

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-10-29
+
+### Added
+
+- `Focus_Components` tool that highlights Grasshopper components' preview and zooms Rhino viewports to it
+- `componentIds` and `zoomExtents` options on `Capture_Viewport` that frame one capture and then restore the camera
+- Support for MCP 2026-07-28 stateless requests alongside the existing protocol
+- The MCP server starts automatically when Grasshopper loads, with an opt-out
+- Overlap-free canvas placement for added and moved components; `Get_AllComponents` returns component bounds
+
+### Changed
+
+- `Capture_Viewport`, `Orbit_Object` and `Capture_Canvas` return the capture as an MCP image followed by a JSON metadata text block. Clients that read only the first content block must now look for the text block
+- The `includeBase64` capture parameter is removed; it is ignored if sent
+- Viewport captures are limited to 2576 px per side; larger canvas captures are downscaled
+- Failed tools set `isError` and use MCP error codes
+- `RemoveComponents` and `Move_Component` are enabled by default; moves no longer nudge components unless asked
+
+### Fixed
+
+- `Canvas_Snapshot` lists Rhino 8 C# and Python script components
+- `List_CSharp_Scripts` no longer lists Sine, Arc and other non-script components
+- `Set_Component_Value` persists values and handles slider ranges
+- Connection and component-info tools accept sliders, panels and other parameters
+- JSON-RPC errors are sent as top-level error objects, and `ping` is answered
+- `LoadDocument` opens files without IO or error dialogs
+- The duplicate `GetDocumentInfo` tool is removed
+- The "Select all" and "Read only" tool presets work again
+
 ## [1.3.4] - 2026-07-29
 
 ### Added

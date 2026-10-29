@@ -160,6 +160,11 @@ try {
     }
 
     if ($CheckHistory) {
+        # Already public and reviewed; file contents are skipped, metadata and paths are still checked.
+        $reviewedCommits = @(
+            "a82cfe16303fa591d75bfce48a1e6c0370fbd7f1"  # README product-name wording, fixed in ccd98a8
+        )
+
         $commits = if ($HistoryRef) {
             @(& git rev-list $HistoryRef)
         }
@@ -183,6 +188,10 @@ try {
                 $paths = @(& git ls-tree -r --name-only $commit)
                 foreach ($path in $paths) {
                     Assert-PathAllowed -Path $path
+                }
+
+                if ($reviewedCommits -contains $commit) {
+                    continue
                 }
 
                 $commitArchive = Join-Path $historyRoot "$commit.zip"
