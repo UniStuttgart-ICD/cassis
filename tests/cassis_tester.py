@@ -1061,7 +1061,9 @@ def run_comprehensive_test():
     def extract_response_text(response):
         """Safely extract text content from MCP response"""
         try:
-            return response.get('result', {}).get('content', [{}])[0].get('text', '{}')
+            # Image results put the image block first; use the first text block.
+            blocks = response.get('result', {}).get('content', [])
+            return next((b['text'] for b in blocks if b.get('type') == 'text'), '{}')
         except (KeyError, IndexError, TypeError):
             return '{}'
     
@@ -1943,7 +1945,7 @@ print(f"Updated Result: {a}")
         console.print("\n🌐 [blue]Test 10.25: Viewport Tools[/blue]")
         
         # Capture_Viewport_Simple
-        success, response = make_mcp_request('tools/call', {'name': 'Capture_Viewport_Simple', 'arguments': {'retentionSeconds': 300, 'includeBase64': False}})
+        success, response = make_mcp_request('tools/call', {'name': 'Capture_Viewport_Simple', 'arguments': {'retentionSeconds': 300}})
         try:
             data = json.loads(extract_response_text(response)) if success else {}
         except Exception:
@@ -1965,7 +1967,7 @@ print(f"Updated Result: {a}")
         # Capture_Viewport (full)
         success, response = make_mcp_request('tools/call', {
             'name': 'Capture_Viewport',
-            'arguments': {'viewportName': None, 'width': 640, 'height': 480, 'includeGrid': False, 'includeAxes': False, 'transparentBackground': False, 'quality': 90, 'retentionSeconds': 300, 'includeBase64': False}
+            'arguments': {'viewportName': None, 'width': 640, 'height': 480, 'includeGrid': False, 'includeAxes': False, 'transparentBackground': False, 'quality': 90, 'retentionSeconds': 300}
         })
         try:
             data = json.loads(extract_response_text(response)) if success else {}
@@ -2014,7 +2016,6 @@ print(f"Updated Result: {a}")
                     'viewPreset': 'iso',
                     'width': 640,
                     'height': 480,
-                    'includeBase64': False,
                     'retentionSeconds': 300,
                 }
             })
@@ -2024,11 +2025,7 @@ print(f"Updated Result: {a}")
                 data = {}
             if isinstance(data, dict) and data.get('capture'):
                 cap = data['capture']
-                if isinstance(cap, dict) and cap.get('content'):
-                    ann = cap['content'][0].get('annotations', {})
-                    path = ann.get('filePath')
-                else:
-                    path = None
+                path = cap.get('filePath') if isinstance(cap, dict) else None
             else:
                 path = data.get('FilePath') or data.get('filePath')
             exists = success and path_exists(path)

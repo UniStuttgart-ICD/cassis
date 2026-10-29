@@ -32,6 +32,7 @@ public static class McpExtensions
 
         return new CallToolResult
         {
+            IsError = true,
             Content =
             [
                 new TextContentBlock
@@ -60,6 +61,21 @@ public static class McpExtensions
     }
 
     /// <summary>
+    /// Creates a result with a PNG image block followed by a JSON text block of metadata.
+    /// </summary>
+    public static CallToolResult CreateImageResult(byte[] png, object metadata)
+    {
+        return new CallToolResult
+        {
+            Content =
+            [
+                new ImageContentBlock { Data = Convert.ToBase64String(png), MimeType = "image/png" },
+                new TextContentBlock { Text = JsonSerializer.Serialize(metadata, CompactJson) }
+            ]
+        };
+    }
+
+    /// <summary>
     /// Safely executes an async operation and returns appropriate MCP result.
     /// </summary>
     public static async Task<CallToolResult> SafeExecuteAsync(Func<Task<object>> operation, string operationName)
@@ -67,7 +83,8 @@ public static class McpExtensions
         try
         {
             var result = await operation();
-            return CreateSuccessResult(result);
+            // Tools that build their own CallToolResult (incl. IsError) must not be re-wrapped as text.
+            return result as CallToolResult ?? CreateSuccessResult(result);
         }
         catch (ArgumentException ex)
         {

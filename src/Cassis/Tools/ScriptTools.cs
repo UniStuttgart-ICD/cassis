@@ -390,51 +390,11 @@ public static class ScriptTools
         return count;
     }
 
-    private static bool IsPythonScriptComponent(IGH_DocumentObject obj)
-    {
-        var typeName = obj.GetType().FullName ?? string.Empty;
-        return typeName.IndexOf("Python", StringComparison.OrdinalIgnoreCase) >= 0;
-    }
+    private static bool IsPythonScriptComponent(IGH_DocumentObject obj) =>
+        ScriptComponentKind.GetLanguage(obj) == "Python";
 
-    private static bool IsCSharpScriptComponent(IGH_DocumentObject obj)
-    {
-        var typeName = obj.GetType().FullName ?? string.Empty;
-        var simpleName = obj.GetType().Name ?? string.Empty;
-
-        // Check for C# script component indicators
-        // RhinoCodePluginGH uses "CSharpComponent" in the type name
-        bool isCSharp = typeName.IndexOf("CSharp", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        simpleName.IndexOf("CSharp", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        (typeName.IndexOf("CS", StringComparison.OrdinalIgnoreCase) >= 0 && 
-                         typeName.IndexOf("Component", StringComparison.OrdinalIgnoreCase) >= 0);
-
-        // Exclude other script languages
-        if (typeName.IndexOf("Python", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            typeName.IndexOf("VB", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return false;
-        }
-
-        // Also check if it's a script component by checking if it has script-related properties
-        if (!isCSharp)
-        {
-            var compType = obj.GetType();
-            // Check for common script component properties/methods
-            var hasScriptProperty = compType.GetProperty("Script") != null ||
-                                   compType.GetProperty("Context") != null ||
-                                   compType.GetMethod("SetSource") != null;
-            
-            // If it has script properties but isn't Python/VB, and name suggests C#, it's likely C#
-            if (hasScriptProperty && 
-                (simpleName.IndexOf("CS", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                 simpleName.IndexOf("C#", StringComparison.OrdinalIgnoreCase) >= 0))
-            {
-                isCSharp = true;
-            }
-        }
-
-        return isCSharp;
-    }
+    private static bool IsCSharpScriptComponent(IGH_DocumentObject obj) =>
+        ScriptComponentKind.GetLanguage(obj) == "C#";
 
     private static string DetectLanguage(IGH_DocumentObject component)
     {

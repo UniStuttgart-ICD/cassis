@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Grasshopper;
+using Grasshopper.GUI.Base;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Parameters;
 using Grasshopper.Kernel.Special;
@@ -238,90 +240,36 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                     return;
                 }
 
+                string? actualValue = value?.ToString();
+
                 // Special-cases for some document objects
                 if (obj is GH_NumberSlider slider)
                 {
-                    // Handle InitCode parameter to set range and value
-                    if (string.Equals(parameterName, "InitCode", StringComparison.OrdinalIgnoreCase))
+                    if (!TrySetSlider(slider, parameterName, value?.ToString(), out actualValue, out var sliderError))
                     {
-                        var initCode = value?.ToString() ?? string.Empty;
-                        slider.SetInitCode(initCode);
-                    }
-                    // Handle Value parameter - try to parse as number and set
-                    else if (double.TryParse(value?.ToString(), out var d))
-                    {
-                        var decimalValue = (decimal)d;
-                        
-                        // Get current slider range and value
-                        // GH_NumberSlider has a Slider property that contains the actual slider control
-                        decimal min = 0m, max = 1m, currentValue = 0.5m;
-                        try
-                        {
-                            // Access via Slider property if available
-                            if (slider.Slider != null)
-                            {
-                                min = slider.Slider.Minimum;
-                                max = slider.Slider.Maximum;
-                                // Try to get current value from slider, fallback to midpoint
-                                try
-                                {
-                                    var valueProp = slider.Slider.GetType().GetProperty("Value");
-                                    if (valueProp != null)
-                                    {
-                                        var val = valueProp.GetValue(slider.Slider);
-                                        if (val != null && decimal.TryParse(val.ToString(), out var parsed))
-                                            currentValue = parsed;
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    Rhino.RhinoApp.WriteLine($"[MCP WARN] Error reading slider value, using midpoint: {ex.Message}");
-                                    currentValue = (min + max) / 2;
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            // Slider property access failed; defaults (0..1) are reasonable
-                            Rhino.RhinoApp.WriteLine($"[MCP WARN] Error accessing slider range, using defaults: {ex.Message}");
-                        }
-                        
-                        // If value is outside current range, adjust the range using SetInitCode
-                        if (decimalValue < min || decimalValue > max)
-                        {
-                            // Set new range with some padding: extend range to include the new value
-                            var diff = Math.Abs((double)(decimalValue - currentValue));
-                            var rangePadding = Math.Max((decimal)(diff * 0.2), 10m);
-                            var newMin = Math.Min(min, decimalValue - rangePadding);
-                            var newMax = Math.Max(max, decimalValue + rangePadding);
-                            var newInitCode = $"{newMin} < {decimalValue} < {newMax}";
-                            slider.SetInitCode(newInitCode);
-                        }
-                        else
-                        {
-                            // Value is within range, just set it
-                            slider.SetSliderValue(decimalValue);
-                        }
-                    }
-                    else
-                    {
-                        tcs.SetResult(new ComponentValueResult(
-                            false,
-                            componentId,
-                            parameterName,
-                            null,
-                            null,
-                            $"Invalid value for Number Slider: {value}"));
+                        tcs.SetResult(new ComponentValueResult(false, componentId, parameterName, null, null, sliderError));
                         return;
                     }
+                }
+                else if (obj is GH_BooleanToggle toggle)
+                {
+                    if (!bool.TryParse(value?.ToString(), out var on))
+                    {
+                        tcs.SetResult(new ComponentValueResult(false, componentId, parameterName, null, null, $"Invalid value for Boolean Toggle: {value}"));
+                        return;
+                    }
+
+                    toggle.Value = on;
+                    toggle.ExpireSolution(false);
                 }
                 else if (obj is GH_Panel panel)
                 {
                     panel.UserText = value?.ToString() ?? string.Empty;
+                    panel.ExpireSolution(false);
                 }
                 else
                 {
-                    // Generic persistent data setter by parameter type
+                    // Persistent data survives recomputes (volatile data would be discarded on the next solve).
                     if (!TrySetParamPersistentData(targetParam, value))
                     {
                         tcs.SetResult(new ComponentValueResult(
@@ -333,6 +281,8 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                             $"Setting values on parameter type '{targetParam.GetType().Name}' is not supported"));
                         return;
                     }
+
+                    targetParam.ExpireSolution(false);
                 }
 
                 doc.NewSolution(false);
@@ -341,7 +291,7 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                     true,
                     componentId,
                     targetParam.Name,
-                    value?.ToString(),
+                    actualValue,
                     "Component value updated");
 
                 _logger.LogInformation("Set component {ComponentId} parameter {Parameter} to {Value}",
@@ -365,6 +315,59 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                     return null;
                 }
 
+                // Number slider: plain value (range widens to fit) or InitCode "min<value<max".
+                static bool TrySetSlider(GH_NumberSlider slider, string parameterName, string? text, out string? actual, out string? error)
+                {
+                    actual = null;
+                    error = null;
+                    var style = NumberStyles.Float;
+                    var inv = CultureInfo.InvariantCulture;
+                    var s = slider.Slider;
+                    decimal newMin = s.Minimum, newMax = s.Maximum, target;
+
+                    if (string.Equals(parameterName, "InitCode", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var parts = (text ?? string.Empty).Split('<');
+                        if (parts.Length != 3
+                            || !decimal.TryParse(parts[0].Trim(), style, inv, out newMin)
+                            || !decimal.TryParse(parts[1].Trim(), style, inv, out target)
+                            || !decimal.TryParse(parts[2].Trim(), style, inv, out newMax)
+                            || newMin > target || target > newMax)
+                        {
+                            error = $"InitCode must be 'min<value<max' with min <= value <= max, got: {text}";
+                            return false;
+                        }
+                    }
+                    else if (!decimal.TryParse(text?.Trim(), style, inv, out target))
+                    {
+                        error = $"Invalid value for Number Slider: {text}";
+                        return false;
+                    }
+                    else
+                    {
+                        var pad = Math.Max(Math.Abs(target) * 0.25m, 1m);
+                        if (target < newMin) newMin = target - pad;
+                        if (target > newMax) newMax = target + pad;
+                    }
+
+                    // Expand first, then contract, so Minimum never exceeds Maximum mid-update.
+                    s.Minimum = Math.Min(s.Minimum, newMin);
+                    s.Maximum = Math.Max(s.Maximum, newMax);
+                    s.Minimum = newMin;
+                    s.Maximum = newMax;
+
+                    var scale = (decimal.GetBits(target)[3] >> 16) & 0xFF;
+                    if (scale > 0 && s.Type == GH_SliderAccuracy.Integer)
+                        s.Type = GH_SliderAccuracy.Float;
+                    if (scale > s.DecimalPlaces)
+                        s.DecimalPlaces = scale;
+
+                    slider.SetSliderValue(target);
+                    slider.ExpireSolution(false);
+                    actual = slider.CurrentValue.ToString(inv);
+                    return true;
+                }
+
                 static bool TrySetParamPersistentData(IGH_Param param, object? valueObj)
                 {
                     try
@@ -379,7 +382,7 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                                 return true;
 
                             case Param_Number pn:
-                                if (double.TryParse(s, out var d2))
+                                if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d2))
                                 {
                                     pn.PersistentData.Clear();
                                     pn.PersistentData.Append(new Grasshopper.Kernel.Types.GH_Number(d2));
@@ -388,7 +391,7 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                                 return false;
 
                             case Grasshopper.Kernel.Parameters.Param_Integer pi:
-                                if (int.TryParse(s, out var i))
+                                if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i))
                                 {
                                     pi.PersistentData.Clear();
                                     pi.PersistentData.Append(new Grasshopper.Kernel.Types.GH_Integer(i));
@@ -406,7 +409,12 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                                 return false;
 
                             default:
-                                return false;
+                                // Other persistent params (e.g. script inputs): GH_PersistentParam<T>.SetPersistentData(params object[]).
+                                var setter = param.GetType().GetMethod("SetPersistentData", new[] { typeof(object[]) });
+                                if (setter == null) return false;
+                                object data = double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var num) ? num : s;
+                                setter.Invoke(param, new object[] { new[] { data } });
+                                return true;
                         }
                     }
                     catch (Exception ex)

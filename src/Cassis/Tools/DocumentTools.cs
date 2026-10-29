@@ -354,18 +354,14 @@ public static class DocumentTools
                         continue;
                     }
 
-                    if (typeName.IndexOf("Script", StringComparison.OrdinalIgnoreCase) >= 0)
+                    var lang = ScriptComponentKind.GetLanguage(obj);
+                    if (lang != null)
                     {
-                        var scriptProp = obj.GetType().GetProperty("ScriptInstance");
-                        if (scriptProp != null)
-                        {
-                            var lang = typeName.IndexOf("Python", StringComparison.OrdinalIgnoreCase) >= 0 ? "Python" : "C#";
-                            bool hasErrors = obj is IGH_ActiveObject active && active.RuntimeMessageLevel == GH_RuntimeMessageLevel.Error;
-                            scripts.Add(new { id = obj.InstanceGuid.ToString(), lang, nick = obj.NickName ?? string.Empty, hasErrors });
-                            if (hasErrors)
-                                errors.Add(new { id = obj.InstanceGuid.ToString(), name = obj.Name ?? lang + " Script", message = $"{lang} script '{obj.NickName}' has errors" });
-                            continue;
-                        }
+                        bool hasErrors = obj is IGH_ActiveObject active && active.RuntimeMessageLevel == GH_RuntimeMessageLevel.Error;
+                        scripts.Add(new { id = obj.InstanceGuid.ToString(), lang, nick = obj.NickName ?? string.Empty, hasErrors });
+                        if (hasErrors)
+                            errors.Add(new { id = obj.InstanceGuid.ToString(), name = obj.Name ?? lang + " Script", message = $"{lang} script '{obj.NickName}' has errors" });
+                        continue;
                     }
 
                     var compName = obj.Name ?? typeName;
