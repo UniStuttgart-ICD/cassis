@@ -3,8 +3,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ModelContextProtocol.Protocol;
@@ -24,6 +27,19 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     private const int MaxConcurrentRequests = 32;
     private const int MaxRequestBodyBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan RequestBodyTimeout = TimeSpan.FromSeconds(30);
+    private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name";
+    private static readonly object ServerCapabilities = new { tools = new { }, prompts = new { } };
+    private const string MetaVersionKey = "io.modelcontextprotocol/protocolVersion";
+    private const string MetaCapabilitiesKey = "io.modelcontextprotocol/clientCapabilities";
+    private const string ServerInfoMetaKey = "io.modelcontextprotocol/serverInfo";
+    private const string LastLegacyVersion = "2025-11-25";
+    private const string ModernVersion = "2026-07-28";
+    private static readonly string[] SupportedVersions = { ModernVersion, "2025-06-18" };
+    private static readonly Regex DateRx = new(@"^\d{4}-\d{2}-\d{2}$");
+    private static readonly HashSet<string> ModernMethods = new(StringComparer.Ordinal)
+    {
+        "server/discover", "tools/list", "tools/call", "prompts/list", "prompts/get"
+    };
 
     private readonly System.Net.HttpListener _listener = new();
     private readonly McpServerOptions _options;
@@ -413,7 +429,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         {
             SetCorsOrigin(context.Response, requestOrigin);
             context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-            context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id";
+            context.Response.Headers["Access-Control-Allow-Headers"] = CorsAllowedHeaders;
             context.Response.StatusCode = (int)HttpStatusCode.OK;
             context.Response.Close();
             return;
@@ -431,7 +447,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 // simple CORS preflight (handled above, but kept for safety)
                 SetCorsOrigin(context.Response, requestOrigin);
                 context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-                context.Response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id";
+                context.Response.Headers["Access-Control-Allow-Headers"] = CorsAllowedHeaders;
                 context.Response.StatusCode = (int)HttpStatusCode.OK;
                 context.Response.Close();
                 break;
@@ -532,6 +548,8 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         if (sessionId is not null)
             _sessions.TryGetValue(sessionId, out session);
 
+        var protocolHeader = context.Request.Headers["MCP-Protocol-Version"];
+
         // parse JSON‑RPC messages (supports arrays, single objects, or JSONL sequences)
         List<JsonRpcMessage> messages;
         using var requestBodyCts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -555,10 +573,27 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             context.Response.Close();
             return;
         }
+        catch (NullRequestIdException) when (IsModernHeader(protocolHeader))
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+            return;
+        }
         catch (JsonException)
         {
+            if (IsModernHeader(protocolHeader))
+            {
+                await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32700, "Parse error")).ConfigureAwait(false);
+                return;
+            }
+
             context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
             context.Response.Close();
+            return;
+        }
+
+        if (IsModern(messages, protocolHeader))
+        {
+            await HandleModernPostAsync(context, messages, protocolHeader).ConfigureAwait(false);
             return;
         }
 
@@ -681,6 +716,215 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
     }
 
+    private static bool IsModern(IReadOnlyList<JsonRpcMessage> messages, string? header)
+    {
+        if (messages.Any(m => m is JsonRpcRequest { Method: "initialize" }))
+            return false;
+        if (messages.Any(m => MetaVersion(m) is not null))
+            return true;
+        return IsModernHeader(header);
+    }
+
+    private static bool IsModernHeader(string? header) =>
+        header is not null && DateRx.IsMatch(header) && string.CompareOrdinal(header, LastLegacyVersion) > 0;
+
+    private static JsonObject? MetaOf(JsonRpcMessage message) =>
+        ((message as JsonRpcRequest)?.Params ?? (message as JsonRpcNotification)?.Params) is JsonObject p
+            ? p["_meta"] as JsonObject
+            : null;
+
+    private static string? MetaVersion(JsonRpcMessage message) => StringOf(MetaOf(message), MetaVersionKey);
+
+    private static string? StringOf(JsonObject? obj, string key) =>
+        obj?[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    private static bool IsPrintableAscii(string value) => value.All(c => c >= 0x20 && c <= 0x7E);
+
+    /// <summary>Decodes an <c>=?base64?...?=</c> header value; null when the value is invalid.</summary>
+    private static string? DecodeHeader(string? value)
+    {
+        if (value is null)
+            return null;
+        if (!value.StartsWith("=?base64?", StringComparison.Ordinal) || !value.EndsWith("?=", StringComparison.Ordinal) || value.Length < 11)
+            return IsPrintableAscii(value) ? value : null;
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(value.Substring(9, value.Length - 11)));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string ErrorJson(int code, string message) =>
+        JsonSerializer.Serialize(new { jsonrpc = "2.0", error = new { code, message } });
+
+    private static async Task WriteModernAsync(HttpListenerContext context, HttpStatusCode status, string? json)
+    {
+        var body = json is null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(json);
+        try
+        {
+            context.Response.StatusCode = (int)status;
+            context.Response.ContentType = "application/json";
+            SetCorsOrigin(context.Response, context.Request.Headers["Origin"]);
+            context.Response.ContentLength64 = body.Length;
+            await context.Response.OutputStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
+            context.Response.Close();
+        }
+        catch (Exception ex) when (ex is HttpListenerException or IOException or ObjectDisposedException)
+        {
+            // Client disconnected before the response was written.
+        }
+    }
+
+    /// <summary>
+    /// Handles MCP 2026-07-28 POSTs: stateless, per-request validation, JSON responses only.
+    /// </summary>
+    private async Task HandleModernPostAsync(
+        HttpListenerContext context,
+        List<JsonRpcMessage> messages,
+        string? protocolHeader)
+    {
+        async Task Reject(HttpStatusCode status, RequestId id, int code, string message, object? data = null)
+        {
+            JsonRpcMessage error = new JsonRpcError
+            {
+                Id = id,
+                Error = new JsonRpcErrorDetail { Code = code, Message = message, Data = data }
+            };
+            await WriteModernAsync(context, status, JsonSerializer.Serialize(error)).ConfigureAwait(false);
+        }
+
+        if (messages.Count != 1)
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+            return;
+        }
+
+        if (messages[0] is JsonRpcNotification)
+        {
+            MessageReceived?.Invoke(messages[0]);
+            await WriteModernAsync(context, HttpStatusCode.Accepted, null).ConfigureAwait(false);
+            return;
+        }
+
+        if (messages[0] is not JsonRpcRequest request)
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(protocolHeader))
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Missing required header", "MCP-Protocol-Version").ConfigureAwait(false);
+            return;
+        }
+
+        var metaVersion = MetaVersion(request);
+        if (metaVersion is null)
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32602, "Invalid params", "_meta.protocolVersion").ConfigureAwait(false);
+            return;
+        }
+
+        if (!string.Equals(protocolHeader, metaVersion, StringComparison.Ordinal))
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Header mismatch", "MCP-Protocol-Version").ConfigureAwait(false);
+            return;
+        }
+
+        if (metaVersion != ModernVersion)
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32022, "Unsupported protocol version",
+                new { supported = SupportedVersions, requested = metaVersion }).ConfigureAwait(false);
+            return;
+        }
+
+        if (MetaOf(request)?[MetaCapabilitiesKey] is not JsonObject)
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32602, "Invalid params", "_meta.clientCapabilities").ConfigureAwait(false);
+            return;
+        }
+
+        var methodHeader = context.Request.Headers["Mcp-Method"];
+        if (methodHeader is null || methodHeader != request.Method || !IsPrintableAscii(methodHeader))
+        {
+            await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Header mismatch", "Mcp-Method").ConfigureAwait(false);
+            return;
+        }
+
+        string? nameKey = request.Method switch
+        {
+            "tools/call" or "prompts/get" => "name",
+            "resources/read" => "uri",
+            _ => null
+        };
+        if (nameKey is not null)
+        {
+            var mcpName = DecodeHeader(context.Request.Headers["Mcp-Name"]);
+            if (mcpName is null || mcpName != StringOf(request.Params as JsonObject, nameKey))
+            {
+                await Reject(HttpStatusCode.BadRequest, request.Id, -32020, "Header mismatch", "Mcp-Name").ConfigureAwait(false);
+                return;
+            }
+        }
+
+        if (!ModernMethods.Contains(request.Method))
+        {
+            var notFound = CreateUnknownMethodError(request.Id, request.Method);
+            await WriteModernAsync(context, HttpStatusCode.NotFound, JsonSerializer.Serialize(notFound)).ConfigureAwait(false);
+            return;
+        }
+
+        JsonRpcMessage response;
+        try
+        {
+            response = await DispatchAsync(request, modern: true).ConfigureAwait(false);
+            MessageReceived?.Invoke(request);
+        }
+        catch (Exception ex)
+        {
+            WriteDebugLog($"[MCP ERROR] Modern request failed: {ex}");
+            response = CreateErrorResponse(request.Id, -32603, "Internal error", ex.Message);
+        }
+
+        await WriteModernAsync(context, HttpStatusCode.OK, JsonSerializer.Serialize(DecorateModern(response, request.Method)))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Adds the 2026-07-28 result fields. Error responses are returned unchanged.
+    /// </summary>
+    private JsonRpcMessage DecorateModern(JsonRpcMessage message, string method)
+    {
+        if (message is not JsonRpcResponse { Result: JsonObject result })
+            return message;
+
+        result["resultType"] = "complete";
+        if (method is "server/discover" or "tools/list" or "prompts/list")
+        {
+            result["ttlMs"] = 0;
+            result["cacheScope"] = "public";
+        }
+
+        if (_options.ServerInfo is { } info)
+        {
+            if (result["_meta"] is not JsonObject meta)
+            {
+                meta = new JsonObject();
+                result["_meta"] = meta;
+            }
+
+            var serverInfo = new JsonObject { ["name"] = info.Name, ["version"] = info.Version };
+            if (info.Title is not null)
+                serverInfo["title"] = info.Title;
+            meta[ServerInfoMetaKey] = serverInfo;
+        }
+
+        return message;
+    }
+
     private static async Task<List<JsonRpcMessage>> ParseJsonRpcMessagesAsync(
         Stream input,
         int maxBytes,
@@ -715,6 +959,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             {
                 foreach (var el in root.EnumerateArray())
                 {
+                    ThrowIfNullId(el);
                     if (el.Deserialize<JsonRpcMessage>() is { } msg)
                     {
                         messages.Add(msg);
@@ -723,6 +968,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             }
             else
             {
+                ThrowIfNullId(root);
                 if (root.Deserialize<JsonRpcMessage>() is { } msg)
                 {
                     messages.Add(msg);
@@ -731,6 +977,20 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
 
         return messages;
+    }
+
+    private static void ThrowIfNullId(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty("id", out var id)
+            && id.ValueKind == JsonValueKind.Null)
+        {
+            throw new NullRequestIdException();
+        }
+    }
+
+    private sealed class NullRequestIdException : JsonException
+    {
     }
 
     private static async Task CopyToAsyncWithCancellation(
@@ -766,18 +1026,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             if (message is JsonRpcRequest request)
             {
 
-                // Handle core MCP protocol requests
-                var response = request.Method switch
-                {
-                    "initialize" => await HandleInitializeRequest(request),
-                    "tools/list" => await HandleToolsListRequest(request),
-                    "tools/call" => await HandleToolCallRequest(request),
-                    "prompts/list" => await HandlePromptsListRequest(request),
-                    "prompts/get" => await HandlePromptGetRequest(request),
-                    "resources/list" => await HandleResourcesListRequest(request),
-                    "resources/read" => await HandleResourceReadRequest(request),
-                    _ => CreateErrorResponse(request.Id, -32601, "Method not found", $"Unknown method: {request.Method}")
-                };
+                var response = await DispatchAsync(request, modern: false);
 
                 MessageReceived?.Invoke(message);
 
@@ -822,6 +1071,23 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
     }
 
+    private async Task<JsonRpcMessage> DispatchAsync(JsonRpcRequest request, bool modern)
+    {
+        return request.Method switch
+        {
+            "initialize" when !modern => await HandleInitializeRequest(request),
+            "server/discover" when modern => HandleDiscoverRequest(request),
+            "tools/list" => await HandleToolsListRequest(request),
+            "tools/call" => await HandleToolCallRequest(request, modern),
+            "prompts/list" => await HandlePromptsListRequest(request),
+            "prompts/get" => await HandlePromptGetRequest(request, modern),
+            "resources/list" when !modern => await HandleResourcesListRequest(request),
+            "resources/read" when !modern => await HandleResourceReadRequest(request),
+            "ping" when !modern => new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { }) },
+            _ => CreateUnknownMethodError(request.Id, request.Method)
+        };
+    }
+
     private async Task<bool> TrySendToSessionAsync(JsonRpcMessage message, string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var session))
@@ -846,12 +1112,29 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             Result = JsonSerializer.SerializeToNode(new
             {
                 protocolVersion = "2025-06-18",
-                capabilities = new { tools = new { }, prompts = new { } },
+                capabilities = ServerCapabilities,
                 serverInfo
             })
         };
 
         return response;
+    }
+
+    /// <summary>
+    /// Handles server/discover (MCP 2026-07-28).
+    /// </summary>
+    private JsonRpcResponse HandleDiscoverRequest(JsonRpcRequest request)
+    {
+        var result = new JsonObject
+        {
+            ["supportedVersions"] = JsonSerializer.SerializeToNode(SupportedVersions),
+            ["capabilities"] = JsonSerializer.SerializeToNode(ServerCapabilities)
+        };
+
+        if (_options.ServerInstructions is { } instructions)
+            result["instructions"] = instructions;
+
+        return new JsonRpcResponse { Id = request.Id, Result = result };
     }
 
     /// <summary>
@@ -959,7 +1242,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles tools/call request by invoking the specified tool.
     /// </summary>
-    private async Task<JsonRpcResponse> HandleToolCallRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandleToolCallRequest(JsonRpcRequest request, bool modern)
     {
         try
         {
@@ -975,7 +1258,9 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 return CreateErrorResponse(request.Id, -32602, "Invalid params", "Missing tool name");
 
             if (!_toolMethods.TryGetValue(toolNameLower, out var method))
-                return CreateErrorResponse(request.Id, -32601, "Not found", $"Tool '{toolNameLower}' not found");
+                return modern
+                    ? CreateErrorResponse(request.Id, -32602, "Invalid params", $"Unknown tool: {toolNameLower}")
+                    : CreateErrorResponse(request.Id, -32601, "Not found", $"Tool '{toolNameLower}' not found");
 
             var argMap = toolParams.Arguments ?? new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.OrdinalIgnoreCase);
 
@@ -990,7 +1275,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 if (p.ParameterType.IsInterface && p.ParameterType.Name.StartsWith("I"))
                 {
                     if (_serviceProvider == null)
-                        return CreateErrorResponse(request.Id, -32000, "Server error", "Service provider not available");
+                        return CreateServerError(request.Id, modern, "Service provider not available");
                     invokeArgs[i] = _serviceProvider.GetService(p.ParameterType);
                     continue;
                 }
@@ -998,7 +1283,14 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 var paramName = p.Name!;
                 if (argMap.TryGetValue(paramName, out var elem))
                 {
-                    invokeArgs[i] = elem.Deserialize(p.ParameterType, McpJsonUtilities.DefaultOptions);
+                    try
+                    {
+                        invokeArgs[i] = elem.Deserialize(p.ParameterType, McpJsonUtilities.DefaultOptions);
+                    }
+                    catch (JsonException ex) when (modern)
+                    {
+                        return CreateErrorResponse(request.Id, -32602, "Invalid params", ex.Message);
+                    }
                 }
                 else if (p.HasDefaultValue)
                 {
@@ -1010,41 +1302,54 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 }
             }
 
-            var resultObj = method.Invoke(null, invokeArgs);
-            if (resultObj is Task task)
+            object? resultObj;
+            try
             {
-                await task.ConfigureAwait(false);
-                var taskType = task.GetType();
-                if (taskType.IsGenericType)
+                resultObj = method.Invoke(null, invokeArgs);
+                if (resultObj is Task pending)
                 {
-                    var resultProperty = taskType.GetProperty("Result");
-                    var taskResult = resultProperty?.GetValue(task);
-                    
-                    // Handle CallToolResult properly using reflection
-                    if (taskResult != null && taskResult.GetType().Name == "CallToolResult")
-                    {
-                        var contentProperty = taskResult.GetType().GetProperty("Content");
-                        if (contentProperty != null)
-                        {
-                            var content = contentProperty.GetValue(taskResult);
-                            return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content }) };
-                        }
-                    }
-                    
-                    return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content = taskResult }) };
+                    await pending.ConfigureAwait(false);
                 }
-                return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { success = true }) };
+            }
+            catch (Exception ex) when (modern)
+            {
+                var failure = (ex as TargetInvocationException)?.InnerException ?? ex;
+                return new JsonRpcResponse
+                {
+                    Id = request.Id,
+                    Result = JsonSerializer.SerializeToNode(new
+                    {
+                        content = new[] { new { type = "text", text = failure.Message } },
+                        isError = true
+                    })
+                };
             }
 
-            // Handle CallToolResult properly using reflection
-            if (resultObj != null && resultObj.GetType().Name == "CallToolResult")
+            if (resultObj is Task task)
             {
-                var contentProperty = resultObj.GetType().GetProperty("Content");
-                if (contentProperty != null)
+                if (!task.GetType().IsGenericType)
                 {
-                    var content = contentProperty.GetValue(resultObj);
-                    return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content }) };
+                    return new JsonRpcResponse
+                    {
+                        Id = request.Id,
+                        Result = modern
+                            ? JsonSerializer.SerializeToNode(new { content = Array.Empty<object>() })
+                            : JsonSerializer.SerializeToNode(new { success = true })
+                    };
                 }
+
+                resultObj = task.GetType().GetProperty("Result")?.GetValue(task);
+            }
+
+            if (modern)
+            {
+                return new JsonRpcResponse { Id = request.Id, Result = ModernToolResult(resultObj) };
+            }
+
+            // 2025-06-18 CallToolResult also defines isError and structuredContent; keep them.
+            if (resultObj is CallToolResult callResult)
+            {
+                return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(callResult, McpJsonUtilities.DefaultOptions) };
             }
 
             return new JsonRpcResponse { Id = request.Id, Result = JsonSerializer.SerializeToNode(new { content = resultObj }) };
@@ -1055,9 +1360,24 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (Exception ex)
         {
-            return CreateErrorResponse(request.Id, -32000, "Server error", ex.Message);
+            return CreateServerError(request.Id, modern, ex.Message);
         }
     }
+
+    private static JsonNode? ModernToolResult(object? value) => value switch
+    {
+        CallToolResult result => JsonSerializer.SerializeToNode(result, McpJsonUtilities.DefaultOptions),
+        null => JsonSerializer.SerializeToNode(new { content = Array.Empty<object>() }),
+        _ => JsonSerializer.SerializeToNode(new
+        {
+            content = new[] { new { type = "text", text = value is string s ? s : JsonSerializer.Serialize(value) } }
+        })
+    };
+
+    private JsonRpcMessage CreateServerError(RequestId id, bool modern, string message) =>
+        modern
+            ? CreateErrorResponse(id, -32603, "Internal error", message)
+            : CreateErrorResponse(id, -32000, "Server error", message);
 
     private sealed class ToolCallParams
     {
@@ -1124,7 +1444,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles prompts/get request by invoking the specified prompt.
     /// </summary>
-    private async Task<JsonRpcResponse> HandlePromptGetRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandlePromptGetRequest(JsonRpcRequest request, bool modern)
     {
         try
         {
@@ -1139,7 +1459,9 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 return CreateErrorResponse(request.Id, -32602, "Invalid params", "Missing prompt name");
 
             if (!_promptMethods.TryGetValue(promptNameLower, out var method))
-                return CreateErrorResponse(request.Id, -32601, "Not found", $"Prompt '{promptNameLower}' not found");
+                return modern
+                    ? CreateErrorResponse(request.Id, -32602, "Invalid params", $"Invalid prompt name: {promptNameLower}")
+                    : CreateErrorResponse(request.Id, -32601, "Not found", $"Prompt '{promptNameLower}' not found");
 
             var argMap = promptParams.Arguments ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1153,7 +1475,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
                 if (p.ParameterType.IsInterface && p.ParameterType.Name.StartsWith("I"))
                 {
                     if (_serviceProvider == null)
-                        return CreateErrorResponse(request.Id, -32000, "Server error", "Service provider not available");
+                        return CreateServerError(request.Id, modern, "Service provider not available");
                     invokeArgs[i] = _serviceProvider.GetService(p.ParameterType);
                     continue;
                 }
@@ -1201,11 +1523,13 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         }
         catch (TargetInvocationException ex)
         {
-            return CreateErrorResponse(request.Id, -32001, "Prompt error", ex.InnerException?.Message ?? ex.Message);
+            return modern
+                ? CreateErrorResponse(request.Id, -32603, "Internal error", ex.InnerException?.Message ?? ex.Message)
+                : CreateErrorResponse(request.Id, -32001, "Prompt error", ex.InnerException?.Message ?? ex.Message);
         }
         catch (Exception ex)
         {
-            return CreateErrorResponse(request.Id, -32000, "Server error", ex.Message);
+            return CreateServerError(request.Id, modern, ex.Message);
         }
     }
 
@@ -1235,7 +1559,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Handles resources/read request.
     /// </summary>
-    private async Task<JsonRpcResponse> HandleResourceReadRequest(JsonRpcRequest request)
+    private async Task<JsonRpcMessage> HandleResourceReadRequest(JsonRpcRequest request)
     {
         return CreateErrorResponse(request.Id, -32601, "Not implemented", "Resource reading not yet implemented");
     }
@@ -1256,20 +1580,24 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     /// <summary>
     /// Creates a JSON-RPC error response.
     /// </summary>
-    private JsonRpcResponse CreateErrorResponse(RequestId id, int code, string message, string? data = null)
+    private JsonRpcMessage CreateErrorResponse(RequestId id, int code, string message, string? data = null)
     {
-        var errorData = new
-        {
-            code,
-            message,
-            data
-        };
-
-        return new JsonRpcResponse
+        return new JsonRpcError
         {
             Id = id,
-            Result = JsonSerializer.SerializeToNode(new { error = errorData })
+            Error = new JsonRpcErrorDetail
+            {
+                Code = code,
+                Message = data is null ? message : $"{message}: {data}",
+                Data = data
+            }
         };
+    }
+
+    private JsonRpcMessage CreateUnknownMethodError(RequestId id, string method)
+    {
+        WriteDebugLog($"[MCP WARN] Unknown method: {method}");
+        return CreateErrorResponse(id, -32601, "Method not found", $"Unknown method: {method}");
     }
 
     /// <summary>

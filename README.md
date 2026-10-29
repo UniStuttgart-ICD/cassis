@@ -128,7 +128,7 @@ Tools are organized by category. Default-enabled tools marked with **(D)**.
 | **Connections** | `getallconnections` **(D)**, `connect_components_by_name`, `validateconnection` |
 | **Panels** | `list_panels` **(D)**, `get_panel_text` **(D)**, `set_panel_text` **(D)** |
 | **Document** | `loaddocument` **(D)**, `closedocument` **(D)**, `getdocumentinfo` **(D)** |
-| **Canvas and viewport** | `canvas_snapshot` **(D)**, `capture_viewport` **(D)**, `manage_namedviews` **(D)** |
+| **Canvas and viewport** | `canvas_snapshot` **(D)**, `capture_viewport` **(D)**, `focus_components` **(D)**, `manage_namedviews` **(D)** |
 | **Solver** | `getsolutionstate` **(D)**, `forcedocumentsolution`, `toggle_solverexecute` |
 | **Diagnostics** | `getsystemhealth`, `runhealthcheck`, `listhealthchecks` |
 

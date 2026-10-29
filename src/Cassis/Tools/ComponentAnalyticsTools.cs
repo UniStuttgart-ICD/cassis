@@ -154,7 +154,8 @@ public static class ComponentAnalyticsTools
         {
             var document = Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
-            var components = document.Objects.OfType<IGH_Component>();
+            // Components plus standalone parameters (sliders, panels, floating params).
+            var components = document.Objects.Where(o => o is IGH_Component || o is IGH_Param).Cast<IGH_ActiveObject>();
             if (!string.IsNullOrWhiteSpace(componentId) && Guid.TryParse(componentId, out var guid))
             {
                 components = components.Where(c => c.InstanceGuid == guid);
@@ -164,6 +165,8 @@ public static class ComponentAnalyticsTools
 
             foreach (var component in components)
             {
+                // A standalone parameter only shows itself as an input when something is wired into it.
+                var inputs = component is IGH_Param { SourceCount: 0 } ? [] : CanvasSockets.Inputs(component);
                 var record = new DetailedComponentRecord
                 {
                     Id = component.InstanceGuid,
@@ -179,8 +182,8 @@ public static class ComponentAnalyticsTools
                         X = component.Attributes?.Pivot.X ?? 0f,
                         Y = component.Attributes?.Pivot.Y ?? 0f
                     },
-                    Inputs = CreateParameterInfo(component.Params.Input),
-                    Outputs = CreateParameterInfo(component.Params.Output),
+                    Inputs = CreateParameterInfo(inputs),
+                    Outputs = CreateParameterInfo(CanvasSockets.Outputs(component)),
                     Phase = component.Phase.ToString()
                 };
 
@@ -274,13 +277,14 @@ public static class ComponentAnalyticsTools
 
             foreach (var source in param.Sources)
             {
-                if (source.Attributes?.GetTopLevel.DocObject is IGH_Component owner)
+                var owner = source.Attributes?.GetTopLevel.DocObject;
+                if (owner is IGH_Component || owner is IGH_Param)
                 {
                     record.Sources.Add(new ConnectionRecord
                     {
                         SourceComponentId = owner.InstanceGuid.ToString(),
                         SourceComponentName = owner.NickName ?? owner.Name ?? owner.GetType().Name,
-                        SourceOutputIndex = owner.Params.Output.IndexOf(source),
+                        SourceOutputIndex = CanvasSockets.Outputs(owner).IndexOf(source),
                         SourceOutputName = source.NickName ?? source.Name ?? string.Empty
                     });
                 }

@@ -12,6 +12,12 @@ git clone https://github.com/UniStuttgart-ICD/cassis.git
 cd cassis
 ```
 
+Enable the repo's git hooks once per clone. The pre-push hook blocks pushes to the public repo that fail the public-release scan (published history cannot be cleaned later):
+
+```bash
+git config core.hooksPath .githooks
+```
+
 Windows:
 
 ```powershell

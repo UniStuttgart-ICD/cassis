@@ -152,13 +152,14 @@ public static class ConnectionTools
 
                 var records = new List<ConnectionRecord>();
 
-                foreach (var component in document.Objects.OfType<IGH_Component>())
+                foreach (var component in document.Objects.Where(o => o is IGH_Component || o is IGH_Param))
                 {
                     var targetId = component.InstanceGuid.ToString();
+                    var componentInputs = CanvasSockets.Inputs(component);
 
-                    for (var inputIndex = 0; inputIndex < component.Params.Input.Count; inputIndex++)
+                    for (var inputIndex = 0; inputIndex < componentInputs.Count; inputIndex++)
                     {
-                        var input = component.Params.Input[inputIndex];
+                        var input = componentInputs[inputIndex];
                         if (input.SourceCount == 0)
                         {
                             continue;
@@ -166,8 +167,8 @@ public static class ConnectionTools
 
                         foreach (var source in input.Sources)
                         {
-                            var owner = source.Attributes?.GetTopLevel.DocObject as IGH_Component;
-                            if (owner == null)
+                            var owner = source.Attributes?.GetTopLevel.DocObject;
+                            if (owner is not IGH_Component && owner is not IGH_Param)
                             {
                                 continue;
                             }
@@ -176,7 +177,7 @@ public static class ConnectionTools
                             {
                                 SourceComponentId = owner.InstanceGuid.ToString(),
                                 SourceComponentName = owner.NickName ?? owner.Name ?? owner.GetType().Name,
-                                SourceOutputIndex = owner.Params.Output.IndexOf(source),
+                                SourceOutputIndex = CanvasSockets.Outputs(owner).IndexOf(source),
                                 SourceOutputName = source.NickName ?? source.Name ?? string.Empty,
                                 TargetComponentId = targetId,
                                 TargetComponentName = component.NickName ?? component.Name ?? component.GetType().Name,
@@ -199,35 +200,23 @@ public static class ConnectionTools
         }, nameof(GetAllConnections));
     }
 
-    private static IGH_Component FindComponent(GH_Document document, string componentId)
+    private static IGH_DocumentObject FindComponent(GH_Document document, string componentId) =>
+        CanvasSockets.Find(document, componentId)
+        ?? throw new ArgumentException($"Component, slider or panel {componentId} not found");
+
+    private static int ResolveOutputIndex(IGH_DocumentObject source, string? nickname)
     {
-        if (!Guid.TryParse(componentId, out var guid))
+        var outputs = CanvasSockets.Outputs(source);
+        if (outputs.Count == 0)
         {
-            throw new ArgumentException($"Invalid component GUID: {componentId}");
-        }
-
-        var component = document.FindObject(guid, false) as IGH_Component;
-        if (component == null)
-        {
-            throw new ArgumentException($"Component {componentId} not found");
-        }
-
-        return component;
-    }
-
-    private static int ResolveOutputIndex(IGH_Component component, string? nickname)
-    {
-        if (component.Params.Output == null || component.Params.Output.Count == 0)
-        {
-            throw new InvalidOperationException($"Component {component.NickName} has no outputs");
+            throw new InvalidOperationException($"Component {source.NickName} has no outputs");
         }
 
         if (!string.IsNullOrWhiteSpace(nickname))
         {
-            for (var i = 0; i < component.Params.Output.Count; i++)
+            for (var i = 0; i < outputs.Count; i++)
             {
-                var candidate = component.Params.Output[i];
-                var name = candidate.NickName ?? candidate.Name ?? string.Empty;
+                var name = outputs[i].NickName ?? outputs[i].Name ?? string.Empty;
                 if (string.Equals(name, nickname, StringComparison.OrdinalIgnoreCase))
                 {
                     return i;
@@ -236,9 +225,9 @@ public static class ConnectionTools
         }
 
         // Fallback: choose the first non-"out" socket, then the first socket.
-        for (var i = 0; i < component.Params.Output.Count; i++)
+        for (var i = 0; i < outputs.Count; i++)
         {
-            var name = component.Params.Output[i].NickName ?? component.Params.Output[i].Name ?? string.Empty;
+            var name = outputs[i].NickName ?? outputs[i].Name ?? string.Empty;
             if (!string.Equals(name.Trim(), "out", StringComparison.OrdinalIgnoreCase))
             {
                 return i;
@@ -248,19 +237,19 @@ public static class ConnectionTools
         return 0;
     }
 
-    private static int ResolveInputIndex(IGH_Component component, string? nickname)
+    private static int ResolveInputIndex(IGH_DocumentObject target, string? nickname)
     {
-        if (component.Params.Input == null || component.Params.Input.Count == 0)
+        var inputs = CanvasSockets.Inputs(target);
+        if (inputs.Count == 0)
         {
-            throw new InvalidOperationException($"Component {component.NickName} has no inputs");
+            throw new InvalidOperationException($"Component {target.NickName} has no inputs");
         }
 
         if (!string.IsNullOrWhiteSpace(nickname))
         {
-            for (var i = 0; i < component.Params.Input.Count; i++)
+            for (var i = 0; i < inputs.Count; i++)
             {
-                var candidate = component.Params.Input[i];
-                var name = candidate.NickName ?? candidate.Name ?? string.Empty;
+                var name = inputs[i].NickName ?? inputs[i].Name ?? string.Empty;
                 if (string.Equals(name, nickname, StringComparison.OrdinalIgnoreCase))
                 {
                     return i;
@@ -271,23 +260,24 @@ public static class ConnectionTools
         return 0;
     }
 
-    private static void PerformConnection(IGH_Component source, int sourceOutputIndex, IGH_Component target, int targetInputIndex)
+    private static void PerformConnection(IGH_DocumentObject source, int sourceOutputIndex, IGH_DocumentObject target, int targetInputIndex)
     {
-        if (source.Params.Output == null || sourceOutputIndex >= source.Params.Output.Count)
+        var outputs = CanvasSockets.Outputs(source);
+        var inputs = CanvasSockets.Inputs(target);
+
+        if (sourceOutputIndex < 0 || sourceOutputIndex >= outputs.Count)
         {
-            throw new ArgumentOutOfRangeException(nameof(sourceOutputIndex), "Source output index out of range");
+            throw new ArgumentOutOfRangeException(nameof(sourceOutputIndex), $"Source has {outputs.Count} outputs");
         }
 
-        if (target.Params.Input == null || targetInputIndex >= target.Params.Input.Count)
+        if (targetInputIndex < 0 || targetInputIndex >= inputs.Count)
         {
-            throw new ArgumentOutOfRangeException(nameof(targetInputIndex), "Target input index out of range");
+            throw new ArgumentOutOfRangeException(nameof(targetInputIndex), $"Target has {inputs.Count} inputs");
         }
 
-        var sourceParam = source.Params.Output[sourceOutputIndex];
-        var targetParam = target.Params.Input[targetInputIndex];
-
+        var targetParam = inputs[targetInputIndex];
         targetParam.RemoveAllSources();
-        targetParam.AddSource(sourceParam);
+        targetParam.AddSource(outputs[sourceOutputIndex]);
 
         target.ExpireSolution(true);
         RhinoApp.WriteLine($"[ConnectionTools] Connected {source.NickName}[{sourceOutputIndex}] → {target.NickName}[{targetInputIndex}]");
@@ -337,22 +327,24 @@ public static class ConnectionTools
             return new ComponentConnectionInfo { Exists = false, Id = Guid.Empty };
         }
 
-        var component = document.FindObject(guid, false) as IGH_Component;
+        var component = CanvasSockets.Find(document, componentId);
         if (component == null)
         {
-            issues.Add($"Component not found: {componentId}");
+            issues.Add($"Component, slider or panel not found: {componentId}");
             return new ComponentConnectionInfo { Exists = false, Id = guid };
         }
 
+        var inputs = CanvasSockets.Inputs(component);
+        var outputs = CanvasSockets.Outputs(component);
         var info = new ComponentConnectionInfo
         {
             Exists = true,
             Id = guid,
             Name = component.NickName ?? component.Name ?? component.GetType().Name,
-            InputCount = component.Params.Input?.Count ?? 0,
-            OutputCount = component.Params.Output?.Count ?? 0,
-            InputNames = component.Params.Input?.Select(p => p.NickName ?? p.Name ?? string.Empty).ToList() ?? new List<string>(),
-            OutputNames = component.Params.Output?.Select(p => p.NickName ?? p.Name ?? string.Empty).ToList() ?? new List<string>()
+            InputCount = inputs.Count,
+            OutputCount = outputs.Count,
+            InputNames = inputs.Select(p => p.NickName ?? p.Name ?? string.Empty).ToList(),
+            OutputNames = outputs.Select(p => p.NickName ?? p.Name ?? string.Empty).ToList()
         };
 
         if (requireOutputIndex.HasValue &&
@@ -408,26 +400,9 @@ public static class ConnectionTools
             {
                 var doc = Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
-                if (!Guid.TryParse(sourceComponentId, out var srcGuid))
-                    throw new ArgumentException("Invalid source GUID");
-                if (!Guid.TryParse(targetComponentId, out var dstGuid))
-                    throw new ArgumentException("Invalid target GUID");
-
-                var srcObj = doc.FindObject(srcGuid, false) as IGH_Component
-                    ?? throw new InvalidOperationException("Source component not found");
-                var dstObj = doc.FindObject(dstGuid, false) as IGH_Component
-                    ?? throw new InvalidOperationException("Target component not found");
-
-                if (sourceOutputIndex < 0 || sourceOutputIndex >= srcObj.Params.Output.Count)
-                    throw new ArgumentOutOfRangeException(nameof(sourceOutputIndex), $"Source has {srcObj.Params.Output.Count} outputs");
-                if (targetInputIndex < 0 || targetInputIndex >= dstObj.Params.Input.Count)
-                    throw new ArgumentOutOfRangeException(nameof(targetInputIndex), $"Target has {dstObj.Params.Input.Count} inputs");
-
-                var srcParam = srcObj.Params.Output[sourceOutputIndex];
-                var dstParam = dstObj.Params.Input[targetInputIndex];
-                dstParam.RemoveAllSources();
-                dstParam.AddSource(srcParam);
-                dstObj.ExpireSolution(true);
+                var srcObj = FindComponent(doc, sourceComponentId);
+                var dstObj = FindComponent(doc, targetComponentId);
+                PerformConnection(srcObj, sourceOutputIndex, dstObj, targetInputIndex);
 
                 return new { success = true, message = $"Connected {srcObj.NickName}[{sourceOutputIndex}] → {dstObj.NickName}[{targetInputIndex}]" };
             });
@@ -454,40 +429,12 @@ public static class ConnectionTools
             {
                 var doc = Instances.ActiveCanvas?.Document ?? throw new InvalidOperationException("No active Grasshopper document");
 
-                if (!Guid.TryParse(sourceComponentId, out var srcGuid))
-                    throw new ArgumentException("Invalid source GUID");
-                if (!Guid.TryParse(targetComponentId, out var dstGuid))
-                    throw new ArgumentException("Invalid target GUID");
-
-                var srcObj = doc.FindObject(srcGuid, false) as IGH_Component
-                    ?? throw new InvalidOperationException("Source component not found");
-                var dstObj = doc.FindObject(dstGuid, false) as IGH_Component
-                    ?? throw new InvalidOperationException("Target component not found");
+                var srcObj = FindComponent(doc, sourceComponentId);
+                var dstObj = FindComponent(doc, targetComponentId);
 
                 // Resolve source output: by name, then first non-"out", then index 0
-                int srcIndex = -1;
-                for (int i = 0; i < srcObj.Params.Output.Count; i++)
-                {
-                    var n = srcObj.Params.Output[i].NickName ?? srcObj.Params.Output[i].Name ?? string.Empty;
-                    if (string.Equals(n, outputName, StringComparison.OrdinalIgnoreCase)) { srcIndex = i; break; }
-                }
-                if (srcIndex < 0)
-                {
-                    for (int i = 0; i < srcObj.Params.Output.Count; i++)
-                    {
-                        var n = (srcObj.Params.Output[i].NickName ?? srcObj.Params.Output[i].Name ?? string.Empty).Trim();
-                        if (!string.Equals(n, "out", StringComparison.OrdinalIgnoreCase)) { srcIndex = i; break; }
-                    }
-                }
-                if (srcIndex < 0) srcIndex = 0;
-
-                if (targetInputIndex < 0 || targetInputIndex >= dstObj.Params.Input.Count)
-                    throw new ArgumentOutOfRangeException(nameof(targetInputIndex), $"Target has {dstObj.Params.Input.Count} inputs");
-
-                var dstParam = dstObj.Params.Input[targetInputIndex];
-                dstParam.RemoveAllSources();
-                dstParam.AddSource(srcObj.Params.Output[srcIndex]);
-                dstObj.ExpireSolution(true);
+                var srcIndex = ResolveOutputIndex(srcObj, outputName);
+                PerformConnection(srcObj, srcIndex, dstObj, targetInputIndex);
 
                 return new { success = true, message = $"Connected {srcObj.NickName}[{srcIndex}] → {dstObj.NickName}[{targetInputIndex}]" };
             });
