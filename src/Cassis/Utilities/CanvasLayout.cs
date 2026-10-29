@@ -5,28 +5,32 @@ using System.Linq;
 namespace Cassis.Utilities;
 
 /// <summary>
-/// Canvas layout modes. Compact is the default (Apple deference: content keeps place).
+/// Canvas layout modes. Compact is the default (block-first: function clusters, then block align).
 /// </summary>
 public enum LayoutMode
 {
-    /// <summary>Island pack + column wrap; each island keeps its centroid.</summary>
+    /// <summary>Computational blocks (function clusters) packed L→R with pin align; blocks aligned as wholes.</summary>
     Compact = 0,
 
-    /// <summary>Same packing, then place islands on a global L→R strip (stronger reorder).</summary>
+    /// <summary>Same block packing, then place islands on a global L→R strip (stronger reorder).</summary>
     Reflow = 1,
 }
 
 /// <summary>
-/// Pure Sugiyama-lite layout with island depth and layer wrap (no Grasshopper types).
+/// Pure Sugiyama-lite layout: computational blocks first, then block placement (no Grasshopper types).
 /// </summary>
 public static class CanvasLayout
 {
+    // Sparse default (LCRL pick): 280/40 ≈ W×1.9; tighter stops stay on the density scrubber.
     public const float DefaultColumnGap = 280f;
     public const float DefaultRowGap = 40f;
     public const float DefaultTitleBand = 48f;
     public const float DefaultIslandGap = 120f;
+    public const float DefaultWireHideLength = 720f;
     public const float MaxExtentGrowth = 1.75f;
     public const int MinCandidateSize = 2;
+    /// <summary>Scribbles / proposeGroups only for larger function clusters.</summary>
+    public const int MinScribbleSize = 4;
     public const int MaxCandidateSize = 25;
 
     public static LayoutPlan Compute(
@@ -133,10 +137,10 @@ public static class CanvasLayout
 
         if (mode == LayoutMode.Compact)
         {
-            // Deference: keep each unit's X; tidy Y within X-columns (wrap if a column towers).
+            // Block-first: pack each function cluster, then align clusters as wholes.
             foreach (var island in islands)
             {
-                PackIslandCompact(
+                PackIslandBlocks(
                     island,
                     unitEdges,
                     unitPivot,
@@ -151,11 +155,11 @@ public static class CanvasLayout
         }
         else
         {
-            // Reflow: full Sugiyama pack, place islands L→R by old X.
+            // Reflow: same block packing per island, place islands L→R by old X.
             float cursorX = oldBounds.MinX;
             foreach (var island in islands.OrderBy(i => i.Average(u => unitPivot[u].X)))
             {
-                var packed = PackIslandReflow(
+                PackIslandBlocks(
                     island,
                     unitEdges,
                     unitPivot,
@@ -164,15 +168,16 @@ public static class CanvasLayout
                     columnGap,
                     rowGap,
                     titleBand,
+                    unitTarget,
                     warnings);
-                var localBounds = UnitBounds(island, packed, unitSizes);
+                var localBounds = UnitBounds(island, unitTarget, unitSizes);
                 var oldCy = island.Average(u => unitPivot[u].Y);
                 var destMinY = oldCy - localBounds.Height * 0.5f;
                 var ox = cursorX - localBounds.MinX;
                 var oy = destMinY - localBounds.MinY;
                 foreach (var u in island)
                 {
-                    var p = packed[u];
+                    var p = unitTarget[u];
                     unitTarget[u] = (p.X + ox, p.Y + oy);
                 }
 
@@ -231,6 +236,8 @@ public static class CanvasLayout
             }
         }
 
+        var wireHides = BuildWireHideHints(edges, byId, leafTarget, DefaultWireHideLength);
+
         var supernodes = unitMembers
             .Where(kv => kv.Value.Count > 1 || groups.Any(g => g.GroupId == kv.Key))
             .Select(kv => new SupernodeInfo(kv.Key, kv.Value.ToArray()))
@@ -242,13 +249,14 @@ public static class CanvasLayout
 
         var scribbles = BuildScribbles(namedGroups, byId, leafTarget, titleBand);
 
-        return new LayoutPlan(moves.ToArray(), supernodes, candidates, scribbles, warnings);
+        return new LayoutPlan(moves.ToArray(), supernodes, candidates, scribbles, wireHides, warnings);
     }
 
     /// <summary>
-    /// Compact: cluster by existing X, pack Y with wrap. Units keep their column place.
+    /// Split WCC into function-sized blocks, pack each L→R with pin align, park on old centroids.
+    /// Avoids unfurling a whole document into one megastrip.
     /// </summary>
-    private static void PackIslandCompact(
+    private static void PackIslandBlocks(
         HashSet<Guid> island,
         List<(Guid From, Guid To)> unitEdges,
         Dictionary<Guid, (float X, float Y)> unitPivot,
@@ -260,60 +268,196 @@ public static class CanvasLayout
         Dictionary<Guid, (float X, float Y)> unitTarget,
         List<string> warnings)
     {
-        _ = columnGap;
-        _ = unitEdges;
-
-        foreach (var u in island)
+        var rankHint = LongestPathRanks(island, unitEdges);
+        var blocks = SplitIsland(island.ToList(), rankHint)
+            .Select(c => c.ToHashSet())
+            .Where(b => b.Count > 0)
+            .ToList();
+        if (blocks.Count == 0)
         {
-            var band = needsTitle.Contains(u) ? titleBand : 0f;
-            unitTarget[u] = (unitPivot[u].X, unitPivot[u].Y + band * 0.5f);
+            foreach (var u in island)
+            {
+                unitTarget[u] = unitPivot[u];
+            }
+
+            return;
         }
 
-        // Resolve Y overlaps when pivots share a narrow X hit (cap width so supernodes do not clear the canvas).
-        const float hitCap = 100f;
-        var ordered = island.OrderBy(u => unitTarget[u].Y).ThenBy(u => unitTarget[u].X).ToList();
-        for (var i = 1; i < ordered.Count; i++)
+        // Density follows columnGap (was floored at 80 and capped growth at 1.75 → always sparse).
+        var blockColGap = Math.Max(36f, Math.Min(columnGap, columnGap * 0.65f + 24f));
+        var widthCap = Math.Min(MaxExtentGrowth, Math.Max(1.1f, 1.05f + columnGap / 400f));
+
+        foreach (var block in blocks)
         {
-            var cur = ordered[i];
-            var (cw, ch) = unitSizes[cur];
-            var hitW = Math.Min(cw, hitCap);
-            var hitH = Math.Min(ch, hitCap);
-            var cx = unitTarget[cur].X;
-            var cy = unitTarget[cur].Y;
-            for (var j = i - 1; j >= 0; j--)
+            var local = PackIslandReflow(
+                block,
+                unitEdges,
+                unitPivot,
+                unitSizes,
+                needsTitle,
+                blockColGap,
+                rowGap,
+                titleBand,
+                warnings);
+            AlignPins(block, unitEdges, local, unitSizes, rowGap);
+
+            // Cap block width vs its old footprint (tighter when gaps are small).
+            var oldBlock = UnitBounds(block, unitPivot, unitSizes);
+            var packed = UnitBounds(block, local, unitSizes);
+            if (oldBlock.Width > 1f && packed.Width > oldBlock.Width * widthCap)
             {
-                var prev = ordered[j];
-                var (pw, ph) = unitSizes[prev];
-                var prevHitW = Math.Min(pw, hitCap);
-                var prevHitH = Math.Min(ph, hitCap);
-                var px = unitTarget[prev].X;
-                var py = unitTarget[prev].Y;
-                var xOverlap = Math.Abs(cx - px) < (hitW + prevHitW) * 0.5f - 0.5f;
-                if (!xOverlap)
+                var cx = packed.MinX + packed.Width * 0.5f;
+                var sx = (oldBlock.Width * widthCap) / packed.Width;
+                foreach (var u in block.ToList())
                 {
-                    continue;
+                    var p = local[u];
+                    local[u] = (cx + (p.X - cx) * sx, p.Y);
                 }
+            }
 
-                var prevBottom = py + prevHitH * 0.5f;
-                var curTop = cy - hitH * 0.5f;
-                var gap = prevBottom + rowGap - curTop;
-                if (gap > 0)
-                {
-                    cy += gap;
-                    unitTarget[cur] = (cx, cy);
-                }
+            // Deference: keep each function near where it already lived.
+            float oldCx = 0, oldCy = 0, newCx = 0, newCy = 0;
+            foreach (var u in block)
+            {
+                oldCx += unitPivot[u].X;
+                oldCy += unitPivot[u].Y;
+                newCx += local[u].X;
+                newCy += local[u].Y;
+            }
 
-                break;
+            var inv = 1f / block.Count;
+            var dx = oldCx * inv - newCx * inv;
+            var dy = oldCy * inv - newCy * inv;
+            foreach (var u in block)
+            {
+                var p = local[u];
+                unitTarget[u] = (p.X + dx, p.Y + dy);
             }
         }
 
-        var oldH = UnitBounds(island, unitPivot, unitSizes).Height;
-        var newH = UnitBounds(island, unitTarget, unitSizes).Height;
-        if (oldH > 1f && newH > oldH * MaxExtentGrowth)
+        // Overlap nudge skipped: pushing stacks blew height on dense docs; centroid park is enough.
+
+        var oldB = UnitBounds(island, unitPivot, unitSizes);
+        var newB = UnitBounds(island, unitTarget, unitSizes);
+        if (oldB.Width > 1f && newB.Width > oldB.Width * MaxExtentGrowth)
         {
             warnings.Add(
-                $"Compact height grew {newH / oldH:0.0}× after overlap resolve. Prefer reflow or a smaller selection.");
+                $"Block pack width grew {newB.Width / oldB.Width:0.0}×. Prefer a smaller selection.");
         }
+
+        if (oldB.Height > 1f && newB.Height > oldB.Height * MaxExtentGrowth)
+        {
+            warnings.Add(
+                $"Block pack height grew {newB.Height / oldB.Height:0.0}×. Prefer a smaller selection or reflow.");
+        }
+    }
+
+    /// <summary>
+    /// Snap 1:1 chains so source and sink share Y (input↔output node points). Soft median otherwise.
+    /// </summary>
+    private static void AlignPins(
+        HashSet<Guid> block,
+        List<(Guid From, Guid To)> unitEdges,
+        Dictionary<Guid, (float X, float Y)> target,
+        Dictionary<Guid, (float W, float H)> unitSizes,
+        float rowGap)
+    {
+        var outDeg = block.ToDictionary(u => u, _ => 0);
+        var inDeg = block.ToDictionary(u => u, _ => 0);
+        var blockEdges = new List<(Guid From, Guid To)>();
+        foreach (var (from, to) in unitEdges)
+        {
+            if (!block.Contains(from) || !block.Contains(to))
+            {
+                continue;
+            }
+
+            outDeg[from]++;
+            inDeg[to]++;
+            blockEdges.Add((from, to));
+        }
+
+        foreach (var (from, to) in blockEdges)
+        {
+            if (outDeg[from] == 1 && inDeg[to] == 1)
+            {
+                var y = (target[from].Y + target[to].Y) * 0.5f;
+                var a = target[from];
+                var b = target[to];
+                target[from] = (a.X, y);
+                target[to] = (b.X, y);
+                continue;
+            }
+
+            // Fan: pull the singleton side to the other's Y when degrees allow a clean snap.
+            if (outDeg[from] == 1 && inDeg[to] > 1)
+            {
+                var a = target[from];
+                target[from] = (a.X, target[to].Y);
+            }
+            else if (outDeg[from] > 1 && inDeg[to] == 1)
+            {
+                var b = target[to];
+                target[to] = (b.X, target[from].Y);
+            }
+        }
+
+        // Resolve vertical overlaps in the same X column after snaps.
+        var byColumn = block
+            .GroupBy(u => (int)Math.Round(target[u].X / 8f))
+            .Select(g => g.OrderBy(u => target[u].Y).ToList());
+        foreach (var col in byColumn)
+        {
+            for (var i = 1; i < col.Count; i++)
+            {
+                var prev = col[i - 1];
+                var cur = col[i];
+                var prevBottom = target[prev].Y + unitSizes[prev].H * 0.5f;
+                var curTop = target[cur].Y - unitSizes[cur].H * 0.5f;
+                var gap = prevBottom + rowGap - curTop;
+                if (gap > 0)
+                {
+                    var t = target[cur];
+                    target[cur] = (t.X, t.Y + gap);
+                }
+            }
+        }
+    }
+
+    private static WireHideHint[] BuildWireHideHints(
+        IReadOnlyList<LayoutEdge> edges,
+        Dictionary<Guid, LayoutNode> byId,
+        Dictionary<Guid, (float X, float Y)> leafTarget,
+        float hideLength)
+    {
+        var hints = new List<WireHideHint>();
+        foreach (var e in edges)
+        {
+            if (!byId.TryGetValue(e.From, out var fromNode) || !byId.TryGetValue(e.To, out var toNode))
+            {
+                continue;
+            }
+
+            var (fx, fy) = leafTarget.TryGetValue(e.From, out var ft)
+                ? ft
+                : (fromNode.PivotX, fromNode.PivotY);
+            var (tx, ty) = leafTarget.TryGetValue(e.To, out var tt)
+                ? tt
+                : (toNode.PivotX, toNode.PivotY);
+
+            // Approximate wire as right edge of source → left edge of sink.
+            var x0 = fx + fromNode.Width * 0.5f;
+            var x1 = tx - toNode.Width * 0.5f;
+            var dx = x1 - x0;
+            var dy = ty - fy;
+            var len = (float)Math.Sqrt(dx * dx + dy * dy);
+            if (len >= hideLength)
+            {
+                hints.Add(new WireHideHint(e.From, e.To, len));
+            }
+        }
+
+        return hints.ToArray();
     }
 
     /// <summary>
@@ -399,7 +543,8 @@ public static class CanvasLayout
                     neighborYs.Sort();
                     var med = neighborYs[neighborYs.Count / 2];
                     var cur = target[u];
-                    target[u] = (cur.X, (cur.Y + med) * 0.5f);
+                    // Snap toward connected node points (input↔output), not a soft blend.
+                    target[u] = (cur.X, med);
                 }
 
                 var ordered = layers[layerIndex].OrderBy(u => target[u].Y).ToList();
@@ -767,7 +912,7 @@ public static class CanvasLayout
 
     private static LayoutPlan EmptyPlan(List<string> warnings) =>
         new(Array.Empty<LayoutMove>(), Array.Empty<SupernodeInfo>(), Array.Empty<GroupCandidate>(),
-            Array.Empty<ScribblePlan>(), warnings);
+            Array.Empty<ScribblePlan>(), Array.Empty<WireHideHint>(), warnings);
 
     private static Dictionary<Guid, Guid> BuildOutermostMembership(
         IReadOnlyList<LayoutMembership> groups,
@@ -988,7 +1133,7 @@ public static class CanvasLayout
         {
             foreach (var chunk in SplitIsland(island, rankHint))
             {
-                if (chunk.Count < MinCandidateSize)
+                if (chunk.Count < MinScribbleSize)
                 {
                     continue;
                 }
@@ -997,7 +1142,7 @@ public static class CanvasLayout
             }
         }
 
-        if (candidates.Count == 0 && ungrouped.Count >= MinCandidateSize)
+        if (candidates.Count == 0 && ungrouped.Count >= MinScribbleSize)
         {
             warnings.Add("proposeGroups found no sized blocks; try naming manually.");
         }
@@ -1005,19 +1150,28 @@ public static class CanvasLayout
         return candidates.ToArray();
     }
 
-    private static Dictionary<Guid, int> LongestPathRanks(HashSet<Guid> nodes, IReadOnlyList<LayoutEdge> edges)
+    private static Dictionary<Guid, int> LongestPathRanks(
+        HashSet<Guid> nodes,
+        IReadOnlyList<LayoutEdge> edges)
+    {
+        return LongestPathRanks(nodes, edges.Select(e => (e.From, e.To)));
+    }
+
+    private static Dictionary<Guid, int> LongestPathRanks(
+        HashSet<Guid> nodes,
+        IEnumerable<(Guid From, Guid To)> edges)
     {
         var adjOut = nodes.ToDictionary(n => n, _ => new List<Guid>());
         var indeg = nodes.ToDictionary(n => n, _ => 0);
-        foreach (var e in edges)
+        foreach (var (from, to) in edges)
         {
-            if (!nodes.Contains(e.From) || !nodes.Contains(e.To) || e.From == e.To)
+            if (!nodes.Contains(from) || !nodes.Contains(to) || from == to)
             {
                 continue;
             }
 
-            adjOut[e.From].Add(e.To);
-            indeg[e.To]++;
+            adjOut[from].Add(to);
+            indeg[to]++;
         }
 
         var q = new Queue<Guid>(nodes.Where(n => indeg[n] == 0));
@@ -1093,7 +1247,11 @@ public sealed record LayoutNode(
 
 public sealed record LayoutEdge(Guid From, Guid To);
 
-public sealed record LayoutMembership(Guid GroupId, IReadOnlyList<Guid> MemberIds);
+public sealed record LayoutMembership(
+    Guid GroupId,
+    IReadOnlyList<Guid> MemberIds,
+    string? Name = null,
+    string? ColourCss = null);
 
 public sealed record NamedGroupSpec(string Name, IReadOnlyList<Guid> ComponentIds, string? Color = null);
 
@@ -1105,9 +1263,13 @@ public sealed record GroupCandidate(string ProvisionalName, IReadOnlyList<Guid> 
 
 public sealed record ScribblePlan(string Name, string Text, float X, float Y);
 
+/// <summary>Hide wires into <see cref="To"/> when laid-out length exceeds the threshold.</summary>
+public sealed record WireHideHint(Guid From, Guid To, float Length);
+
 public sealed record LayoutPlan(
     IReadOnlyList<LayoutMove> Moves,
     IReadOnlyList<SupernodeInfo> Supernodes,
     IReadOnlyList<GroupCandidate> GroupCandidates,
     IReadOnlyList<ScribblePlan> Scribbles,
+    IReadOnlyList<WireHideHint> WireHides,
     IReadOnlyList<string> Warnings);

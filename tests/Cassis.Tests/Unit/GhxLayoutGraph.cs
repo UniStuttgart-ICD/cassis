@@ -69,7 +69,9 @@ internal static class GhxLayoutGraph
                     .Select(i => Guid.TryParse(i.Value.Trim(), out var g) ? g : Guid.Empty)
                     .Where(g => g != Guid.Empty)
                     .ToList();
-                groups.Add(new LayoutMembership(ownerId, memberIds));
+                var nick = ItemText(container, "NickName");
+                var colour = ItemTextArgb(container, "Colour");
+                groups.Add(new LayoutMembership(ownerId, memberIds, nick, colour));
                 continue;
             }
 
@@ -117,6 +119,34 @@ internal static class GhxLayoutGraph
             .FirstOrDefault(i => (string?)i.Attribute("name") == name)
             ?.Value
             ?.Trim();
+    }
+
+    /// <summary>GH drawing colour item → css rgba, or null.</summary>
+    private static string? ItemTextArgb(XElement parent, string name)
+    {
+        var item = parent.Elements("items")
+            .Elements("item")
+            .FirstOrDefault(i => (string?)i.Attribute("name") == name);
+        var raw = item?.Element("ARGB")?.Value?.Trim() ?? item?.Value?.Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var parts = raw.Split(';');
+        if (parts.Length != 4
+            || !int.TryParse(parts[0], out var a)
+            || !int.TryParse(parts[1], out var r)
+            || !int.TryParse(parts[2], out var g)
+            || !int.TryParse(parts[3], out var b))
+        {
+            return null;
+        }
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "rgba({0},{1},{2},{3:0.###})",
+            r, g, b, Math.Min(1.0, a / 255.0));
     }
 
     private static (float X, float Y, float W, float H) ReadPivotBounds(XElement container)

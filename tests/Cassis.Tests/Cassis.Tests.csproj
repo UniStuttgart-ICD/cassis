@@ -65,6 +65,9 @@
         <None Update="Rhino.Testing.Configs.xml">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </None>
+        <None Update="Unit\layout-density.template.html">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 
     <!-- Fix for .NET Framework 4.8 assembly loading -->

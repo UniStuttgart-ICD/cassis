@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html><head><meta charset=utf-8><title>LCRL density scrubber</title>
+<style>
+body{margin:0;background:#f4f2ee;font-family:Consolas,ui-monospace,monospace;color:#222}
+#bar{position:sticky;top:0;z-index:2;background:#f4f2ee;border-bottom:1px solid #ccc;padding:10px 14px;display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center}
+#bar label{display:flex;align-items:center;gap:8px;font-size:13px}
+#bar input[type=range]{width:240px}
+#meta{font-size:12px;color:#555}
+#stage{padding:8px;overflow:auto;height:calc(100vh - 64px)}
+svg{background:#fff;border:1px solid #ddd;cursor:grab;touch-action:none}
+svg.dragging{cursor:grabbing}
+rect.node{stroke:#333;stroke-width:0.5}
+rect.node.frozen{fill:#9cf}
+rect.node.live{fill:#fc9}
+line.wire{stroke:#999;stroke-width:0.5}
+rect.group{fill-opacity:0.18;stroke-width:1.5;stroke-opacity:0.85}
+text.glabel{font-size:11px;fill:#333;pointer-events:none}
+</style></head><body>
+<div id=bar>
+  <strong>Density</strong>
+  <label>sparse <input id=density type=range min=0 max=100 value=0> tight</label>
+  <label><input id=showWires type=checkbox> wires</label>
+  <label><input id=showGroups type=checkbox checked> groups</label>
+  <label><input id=showBefore type=checkbox> BEFORE ghost</label>
+  <span id=meta></span>
+  <span style="font-size:12px;color:#666">Drag orange nodes · __SOURCE__ · solver preview only</span>
+</div>
+<div id=stage><svg id=svg xmlns="http://www.w3.org/2000/svg"></svg></div>
+<script>
+const DATA = __DATA__;
+const svg = document.getElementById('svg');
+const densityEl = document.getElementById('density');
+const wiresEl = document.getElementById('showWires');
+const groupsEl = document.getElementById('showGroups');
+const beforeEl = document.getElementById('showBefore');
+const metaEl = document.getElementById('meta');
+let xy = new Float64Array(DATA.n * 2);
+let drag = null;
+let cam = null;
+
+function lerpStops(t) {
+  const stops = DATA.stops;
+  const u = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+  const i0 = Math.floor(u);
+  const i1 = Math.min(stops.length - 1, i0 + 1);
+  const f = u - i0;
+  const a = stops[i0], b = stops[i1];
+  const out = new Float64Array(DATA.n * 2);
+  for (let i = 0; i < out.length; i++) out[i] = a.xy[i] * (1 - f) + b.xy[i] * f;
+  return {xy: out, col: a.col*(1-f)+b.col*f, row: a.row*(1-f)+b.row*f};
+}
+
+function bounds(arr) {
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for (let i=0;i<DATA.n;i++) {
+    const x=arr[i*2], y=arr[i*2+1], hw=DATA.w[i]*0.5, hh=DATA.h[i]*0.5;
+    minX=Math.min(minX,x-hw); minY=Math.min(minY,y-hh);
+    maxX=Math.max(maxX,x+hw); maxY=Math.max(maxY,y+hh);
+  }
+  return {minX,minY,maxX,maxY,W:maxX-minX,H:maxY-minY};
+}
+
+function fit(b) {
+  const readable=0.05, f=Math.min(1100/Math.max(1,b.W), 720/Math.max(1,b.H));
+  return Math.min(0.2, Math.max(readable, Math.min(f, readable*2)));
+}
+
+function groupColor(i) {
+  const h = (i * 47) % 360;
+  return 'hsl(' + h + ' 55% 45%)';
+}
+
+function applyDensity() {
+  const packed = lerpStops(densityEl.value / 100);
+  xy = packed.xy;
+  cam = null;
+  const b0 = bounds(DATA.before);
+  const b1 = bounds(xy);
+  metaEl.textContent = 'gap ~' + packed.col.toFixed(0) + '/' + packed.row.toFixed(0) +
+    ' · canvas ' + b1.W.toFixed(0) + 'x' + b1.H.toFixed(0) +
+    ' · vs BEFORE W×' + (b1.W/b0.W).toFixed(2) + ' H×' + (b1.H/b0.H).toFixed(2) +
+    ' · groups ' + ((DATA.groups && DATA.groups.length) || 0);
+  draw();
+}
+
+function draw() {
+  const showBefore = beforeEl.checked;
+  const showWires = wiresEl.checked;
+  const showGroups = groupsEl.checked;
+  let b = bounds(xy);
+  if (showBefore) {
+    const g = bounds(DATA.before);
+    b = {
+      minX: Math.min(b.minX, g.minX), minY: Math.min(b.minY, g.minY),
+      maxX: Math.max(b.maxX, g.maxX), maxY: Math.max(b.maxY, g.maxY),
+      W: 0, H: 0
+    };
+    b.W = b.maxX - b.minX; b.H = b.maxY - b.minY;
+  }
+  if (!drag || !cam) cam = {b, scale: fit(b)};
+  const scale = cam.scale;
+  b = cam.b;
+  const pad = 20, top = 10;
+  svg.setAttribute('width', b.W * scale + pad * 2);
+  svg.setAttribute('height', b.H * scale + pad * 2 + top);
+  const mx = x => pad + (x - b.minX) * scale;
+  const my = y => pad + top + (y - b.minY) * scale;
+  let html = '';
+  if (showBefore) {
+    if (showWires) {
+      for (const e of DATA.edges) {
+        const a = e[0], c = e[1];
+        html += '<line class="wire" opacity="0.25" x1="' + mx(DATA.before[a*2]) + '" y1="' + my(DATA.before[a*2+1]) +
+          '" x2="' + mx(DATA.before[c*2]) + '" y2="' + my(DATA.before[c*2+1]) + '" />';
+      }
+    }
+    for (let i = 0; i < DATA.n; i++) {
+      const rw = Math.max(4, DATA.w[i]*scale), rh = Math.max(4, DATA.h[i]*scale);
+      html += '<rect opacity="0.2" x="' + (mx(DATA.before[i*2])-rw/2) + '" y="' + (my(DATA.before[i*2+1])-rh/2) +
+        '" width="' + rw + '" height="' + rh + '" fill="#bbb" stroke="#888" />';
+    }
+  }
+  if (showGroups && DATA.groups) {
+    const gpad = 12;
+    DATA.groups.forEach((g, gi) => {
+      let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity, hit=0;
+      for (const i of g.m) {
+        if (i < 0 || i >= DATA.n) continue;
+        hit++;
+        const hw=DATA.w[i]*0.5, hh=DATA.h[i]*0.5;
+        minX=Math.min(minX, xy[i*2]-hw); minY=Math.min(minY, xy[i*2+1]-hh);
+        maxX=Math.max(maxX, xy[i*2]+hw); maxY=Math.max(maxY, xy[i*2+1]+hh);
+      }
+      if (hit < 1 || !isFinite(minX)) return;
+      const col = g.c || groupColor(gi);
+      const x = mx(minX - gpad), y = my(minY - gpad);
+      const w = (maxX - minX + gpad * 2) * scale, h = (maxY - minY + gpad * 2) * scale;
+      html += '<rect class="group" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h +
+        '" fill="' + col + '" stroke="' + col + '" rx="4" />';
+      const label = (g.n && g.n.length) ? g.n : ('G' + gi);
+      html += '<text class="glabel" x="' + (x + 4) + '" y="' + (y + 12) + '">' + label + '</text>';
+    });
+  }
+  if (showWires) {
+    for (const e of DATA.edges) {
+      const a = e[0], c = e[1];
+      html += '<line class="wire" x1="' + mx(xy[a*2]) + '" y1="' + my(xy[a*2+1]) +
+        '" x2="' + mx(xy[c*2]) + '" y2="' + my(xy[c*2+1]) + '" />';
+    }
+  }
+  for (let i = 0; i < DATA.n; i++) {
+    const rw = Math.max(5, DATA.w[i]*scale), rh = Math.max(5, DATA.h[i]*scale);
+    const cls = DATA.frozen[i] ? 'node frozen' : 'node live';
+    html += '<rect class="' + cls + '" data-i="' + i + '" x="' + (mx(xy[i*2])-rw/2) + '" y="' + (my(xy[i*2+1])-rh/2) +
+      '" width="' + rw + '" height="' + rh + '" />';
+  }
+  svg.innerHTML = html;
+  svg._map = {scale};
+}
+
+svg.addEventListener('pointerdown', e => {
+  const t = e.target;
+  if (!(t instanceof SVGRectElement) || !t.classList.contains('live')) return;
+  const i = +t.dataset.i;
+  drag = {i, x: xy[i*2], y: xy[i*2+1], px: e.clientX, py: e.clientY};
+  svg.classList.add('dragging');
+  t.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+svg.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const scale = svg._map.scale;
+  xy[drag.i*2] = drag.x + (e.clientX - drag.px) / scale;
+  xy[drag.i*2+1] = drag.y + (e.clientY - drag.py) / scale;
+  draw();
+});
+function endDrag() { drag = null; svg.classList.remove('dragging'); }
+svg.addEventListener('pointerup', endDrag);
+svg.addEventListener('pointercancel', endDrag);
+densityEl.addEventListener('input', applyDensity);
+wiresEl.addEventListener('change', draw);
+groupsEl.addEventListener('change', draw);
+beforeEl.addEventListener('change', () => { cam = null; draw(); });
+applyDensity();
+</script>
+</body></html>

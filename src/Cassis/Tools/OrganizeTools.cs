@@ -23,24 +23,26 @@ public static class OrganizeTools
 {
     [McpServerTool(Name = "Organize_Canvas")]
     [Description(
-        "Plans a left-to-right layered layout for the active Grasshopper canvas. " +
+        "Plans a left-to-right layout for the active Grasshopper canvas. " +
         "Default is dry-run (apply false). Set apply true to move pivots in one batch. " +
-        "Default layoutMode is compact: keep places, push apart X-overlapping stacks. " +
-        "Use reflow for a full L-to-R Sugiyama strip with rank wrap. " +
+        "Default layoutMode is compact: organize computational blocks (function clusters) first with " +
+        "input↔output pin alignment, then align blocks as wholes. Long wires are hidden on apply. " +
+        "Use reflow to also strip islands L-to-R. " +
         "Walks param Sources so panels and sliders count as nodes. " +
         "Existing groups move as rigid supernodes. " +
-        "Optional namedGroups creates a Consolas Scribble title at the top-left and wraps ungrouped members. " +
+        "Optional namedGroups creates a Consolas Scribble title at the top-left and wraps ungrouped members " +
+        "(prefer larger clusters only). " +
         "Optional componentIds freezes everything else as obstacles.")]
     public static async Task<CallToolResult> OrganizeCanvas(
-        [Description("When true, write pivots and optional groups. Default false returns the plan only.")]
+        [Description("When true, write pivots, optional groups, and hide long wires. Default false returns the plan only.")]
         bool apply = false,
         [Description("Optional InstanceGuids to move. Omit to organize the whole document. Others stay fixed.")]
         string[]? componentIds = null,
-        [Description("When true, return groupCandidates for ungrouped islands. Agent must supply names via namedGroups.")]
+        [Description("When true, return groupCandidates for larger ungrouped function clusters. Agent supplies names via namedGroups.")]
         bool proposeGroups = false,
         [Description("Optional named groups as JSON array of {name, componentIds, color?}. Applied only when apply is true and ids are ungrouped.")]
         string? namedGroupsJson = null,
-        [Description("compact (default) keeps island places; reflow packs islands L-to-R.")]
+        [Description("compact (default) packs computational blocks then aligns them; reflow also places islands L-to-R.")]
         string layoutMode = "compact",
         [Description("Horizontal gap between layers (default 280).")]
         float columnGap = CanvasLayout.DefaultColumnGap,
@@ -125,10 +127,12 @@ public static class OrganizeTools
 
         object? applied = null;
         var undoOk = false;
+        var wiresHidden = 0;
         if (apply)
         {
             undoOk = TryBeginUndo(doc, "Cassis Organize Canvas");
             ApplyMoves(doc, plan.Moves);
+            wiresHidden = ApplyWireHides(doc, plan.WireHides);
             var groupResults = new List<object>();
             foreach (var ng in namedSpecs)
             {
@@ -139,6 +143,7 @@ public static class OrganizeTools
             applied = new
             {
                 moveCount = plan.Moves.Count,
+                wiresHidden,
                 groups = groupResults,
                 undoRecorded = undoOk,
             };
@@ -171,6 +176,12 @@ public static class OrganizeTools
                 text = s.Text,
                 x = s.X,
                 y = s.Y,
+            }),
+            wireHides = plan.WireHides.Select(w => new
+            {
+                from = w.From.ToString(),
+                to = w.To.ToString(),
+                length = Math.Round(w.Length, 1),
             }),
             applied,
             warnings = BuildResponseWarnings(plan.Warnings, filter, apply, undoOk),
@@ -376,6 +387,62 @@ public static class OrganizeTools
             obj.Attributes.Pivot = new PointF(move.ToX, move.ToY);
             obj.Attributes.ExpireLayout();
         }
+    }
+
+    /// <summary>
+    /// Hide wires into destination params when the laid-out span is too long (GH_ParamWireDisplay.hidden).
+    /// </summary>
+    private static int ApplyWireHides(GH_Document doc, IReadOnlyList<WireHideHint> hints)
+    {
+        if (hints.Count == 0)
+        {
+            return 0;
+        }
+
+        var hidePairs = hints.Select(h => (h.From, h.To)).ToHashSet();
+        var count = 0;
+        foreach (var obj in doc.Objects)
+        {
+            if (obj is GH_Group)
+            {
+                continue;
+            }
+
+            foreach (var param in EnumerateParams(obj))
+            {
+                if (param.SourceCount == 0)
+                {
+                    continue;
+                }
+
+                var toOwner = obj.InstanceGuid;
+                var hide = false;
+                foreach (var src in param.Sources)
+                {
+                    if (src == null)
+                    {
+                        continue;
+                    }
+
+                    var fromOwner = ResolveOwnerGuid(src);
+                    if (hidePairs.Contains((fromOwner, toOwner)))
+                    {
+                        hide = true;
+                        break;
+                    }
+                }
+
+                if (!hide)
+                {
+                    continue;
+                }
+
+                param.WireDisplay = GH_ParamWireDisplay.hidden;
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private static object ApplyNamedGroup(
