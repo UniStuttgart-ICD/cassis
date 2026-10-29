@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-29
+
+### Added
+
+- `Organize_Canvas` tool that lays out the Grasshopper canvas left to right. It previews by default (`apply` false), has `compact` (keep places, unstack overlaps) and `reflow` (re-pack left to right) modes, moves existing groups as rigid blocks, and can wrap named blocks in groups with Scribble titles
+- `cassis-organize` agent skill for organizing and grouping a definition
+- `GroupExistingComponents` and `CreateComponentGroup` are enabled by default
+
+### Known issues
+
+- With `componentIds`, moved components can still overlap the components left in place
+- `reflow` keeps the existing left-to-right order of a canvas drawn right to left
+
 ## [1.4.0] - 2026-10-29
 
 ### Added

@@ -1,6 +1,6 @@
 [project]
 name = "cassis-tests"
-version = "1.4.0"
+version = "1.5.0"
 description = "Integration tests for the Cassis Grasshopper plugin"
 readme = "README.md"
 requires-python = ">=3.9"
