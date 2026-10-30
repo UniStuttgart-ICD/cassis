@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `Capture_Canvas`, `Save_Visible_Canvas`, `Capture_Viewport`, `Capture_Viewport_Simple` and `Orbit_Object` return the image inline and write no file by default, so captures no longer land on the Desktop or in the plugin folder
+- `Capture_Viewport` and `Orbit_Object` accept `filePath` to also save a PNG, like `Capture_Canvas`. Files you ask for are kept
+- `retentionSeconds` is removed and ignored if sent. The `filePath` and `file` metadata fields only appear when a file was saved; `fileSize` is now the size of the returned image
+
 ## [1.5.0] - 2026-10-29
 
 ### Added
