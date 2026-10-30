@@ -118,7 +118,7 @@ public sealed class ViewportCaptureMetadata
     public DateTime Timestamp { get; set; }
 
     [JsonPropertyName("filePath")]
-    public string FilePath { get; set; } = string.Empty;
+    public string? FilePath { get; set; }
 
     [JsonPropertyName("framing")]
     public string? Framing { get; set; }

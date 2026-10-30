@@ -30,4 +30,29 @@ internal static class ImageEncoding
 
         return stream.ToArray();
     }
+
+    /// <summary>Saves a PNG only when the caller named a path, and returns that path. The file is never auto-deleted.</summary>
+    internal static string? SavePng(Bitmap bitmap, string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return null;
+        }
+
+        var path = Path.GetExtension(filePath!) switch
+        {
+            ".png" => filePath!,
+            "" => filePath + ".png",
+            _ => Path.ChangeExtension(filePath!, ".png")
+        };
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory!);
+        }
+
+        bitmap.Save(path, ImageFormat.Png);
+        return path;
+    }
 }
