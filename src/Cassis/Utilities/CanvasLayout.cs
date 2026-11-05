@@ -290,8 +290,9 @@ public static class CanvasLayout
             .Select(kv => new SupernodeInfo(kv.Key, kv.Value.ToArray()))
             .ToArray();
 
+        var graph = CanvasGraphAnalysis.Analyze(nodes, edges, membership, MaxCandidateSize);
         var candidates = proposeGroups
-            ? ProposeFunctionalBlocks(nodes, edges, membership, warnings)
+            ? ModulesToCandidates(graph.Modules, warnings)
             : Array.Empty<GroupCandidate>();
 
         var scribbles = BuildScribbles(namedGroups, byId, leafTarget, titleBand);
@@ -303,7 +304,8 @@ public static class CanvasLayout
             scribbles,
             wireHides,
             warnings,
-            leafStage);
+            leafStage,
+            graph);
     }
 
     /// <summary>
@@ -1490,80 +1492,23 @@ public static class CanvasLayout
         return idxs.Count == 0 ? 0f : idxs[idxs.Count / 2];
     }
 
-    private static GroupCandidate[] ProposeFunctionalBlocks(
-        IReadOnlyList<LayoutNode> nodes,
-        IReadOnlyList<LayoutEdge> edges,
-        Dictionary<Guid, Guid> membership,
+    private static GroupCandidate[] ModulesToCandidates(
+        IReadOnlyList<GraphModule> modules,
         List<string> warnings)
     {
-        var ungrouped = nodes.Where(n => !n.Frozen && !membership.ContainsKey(n.Id)).Select(n => n.Id).ToHashSet();
-        if (ungrouped.Count < MinCandidateSize)
+        // Leiden already caps module size; keep scribble-sized candidates only.
+        var candidates = modules
+            .Where(m => m.MemberIds.Count >= MinScribbleSize && m.MemberIds.Count <= MaxCandidateSize)
+            .OrderByDescending(m => m.MemberIds.Count)
+            .Select((m, i) => new GroupCandidate($"Block {i + 1}", m.MemberIds.ToArray()))
+            .ToArray();
+
+        if (candidates.Length == 0)
         {
-            return Array.Empty<GroupCandidate>();
+            warnings.Add("proposeGroups found no Leiden modules ≥ MinScribbleSize; try naming manually.");
         }
 
-        var undirected = ungrouped.ToDictionary(id => id, _ => new List<Guid>());
-        foreach (var e in edges)
-        {
-            if (!ungrouped.Contains(e.From) || !ungrouped.Contains(e.To))
-            {
-                continue;
-            }
-
-            undirected[e.From].Add(e.To);
-            undirected[e.To].Add(e.From);
-        }
-
-        var seen = new HashSet<Guid>();
-        var islands = new List<List<Guid>>();
-        foreach (var start in ungrouped.OrderBy(id => id))
-        {
-            if (!seen.Add(start))
-            {
-                continue;
-            }
-
-            var stack = new Stack<Guid>();
-            stack.Push(start);
-            var island = new List<Guid>();
-            while (stack.Count > 0)
-            {
-                var u = stack.Pop();
-                island.Add(u);
-                foreach (var v in undirected[u])
-                {
-                    if (seen.Add(v))
-                    {
-                        stack.Push(v);
-                    }
-                }
-            }
-
-            islands.Add(island);
-        }
-
-        var rankHint = LongestPathRanks(ungrouped, edges);
-        var candidates = new List<GroupCandidate>();
-        var blockIndex = 1;
-        foreach (var island in islands.OrderByDescending(i => i.Count))
-        {
-            foreach (var chunk in SplitIsland(island, rankHint))
-            {
-                if (chunk.Count < MinScribbleSize)
-                {
-                    continue;
-                }
-
-                candidates.Add(new GroupCandidate($"Block {blockIndex++}", chunk.ToArray()));
-            }
-        }
-
-        if (candidates.Count == 0 && ungrouped.Count >= MinScribbleSize)
-        {
-            warnings.Add("proposeGroups found no sized blocks; try naming manually.");
-        }
-
-        return candidates.ToArray();
+        return candidates;
     }
 
     private static Dictionary<Guid, int> LongestPathRanks(
@@ -1659,9 +1604,11 @@ public sealed record LayoutNode(
     float PivotY,
     float Width,
     float Height,
-    bool Frozen = false);
+    bool Frozen = false,
+    LayoutNodeKind Kind = LayoutNodeKind.Compute,
+    string? NickName = null);
 
-public sealed record LayoutEdge(Guid From, Guid To);
+public sealed record LayoutEdge(Guid From, Guid To, LayoutEdgeRole Role = LayoutEdgeRole.Data);
 
 public sealed record LayoutMembership(
     Guid GroupId,
@@ -1689,4 +1636,5 @@ public sealed record LayoutPlan(
     IReadOnlyList<ScribblePlan> Scribbles,
     IReadOnlyList<WireHideHint> WireHides,
     IReadOnlyList<string> Warnings,
-    IReadOnlyDictionary<Guid, int>? StageByNode = null);
+    IReadOnlyDictionary<Guid, int>? StageByNode = null,
+    CanvasGraphSnapshot? Graph = null);

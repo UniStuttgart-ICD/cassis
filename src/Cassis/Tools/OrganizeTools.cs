@@ -29,6 +29,8 @@ public static class OrganizeTools
         "input↔output pin alignment, then align blocks as wholes. Long wires are hidden on apply. " +
         "Use reflow to also strip islands L-to-R. " +
         "Walks param Sources so panels and sliders count as nodes. " +
+        "Builds an enriched analysis graph (node kinds, data vs display edges) and Leiden communities; " +
+        "dry-run returns graph.modules for the agent to name. " +
         "Existing groups move as rigid supernodes. " +
         "Optional namedGroups creates a Consolas Scribble title at the top-left and wraps ungrouped members " +
         "(prefer larger clusters only). " +
@@ -38,7 +40,7 @@ public static class OrganizeTools
         bool apply = false,
         [Description("Optional InstanceGuids to move. Omit to organize the whole document. Others stay fixed.")]
         string[]? componentIds = null,
-        [Description("When true, return groupCandidates for larger ungrouped function clusters. Agent supplies names via namedGroups.")]
+        [Description("When true, return groupCandidates from Leiden modules. Agent supplies names via namedGroups.")]
         bool proposeGroups = false,
         [Description("Optional named groups as JSON array of {name, componentIds, color?}. Applied only when apply is true and ids are ungrouped.")]
         string? namedGroupsJson = null,
@@ -183,6 +185,21 @@ public static class OrganizeTools
                 to = w.To.ToString(),
                 length = Math.Round(w.Length, 1),
             }),
+            graph = plan.Graph == null ? null : new
+            {
+                method = plan.Graph.Method,
+                nodeCount = plan.Graph.NodeCount,
+                dataEdges = plan.Graph.DataEdgeCount,
+                displayEdges = plan.Graph.DisplayEdgeCount,
+                kinds = plan.Graph.KindCounts,
+                modules = plan.Graph.Modules.Select(m => new
+                {
+                    id = m.Id,
+                    size = m.MemberIds.Count,
+                    method = m.Method,
+                    componentIds = m.MemberIds.Select(id => id.ToString()),
+                }),
+            },
             applied,
             warnings = BuildResponseWarnings(plan.Warnings, filter, apply, undoOk),
         };
@@ -260,23 +277,50 @@ public static class OrganizeTools
                 frozen = true;
             }
 
-            nodes.Add(new LayoutNode(obj.InstanceGuid, pivot.X, pivot.Y, w, h, frozen));
+            var nick = obj.NickName;
+            if (string.IsNullOrWhiteSpace(nick))
+            {
+                nick = obj.Name;
+            }
+
+            nodes.Add(new LayoutNode(
+                obj.InstanceGuid,
+                pivot.X,
+                pivot.Y,
+                w,
+                h,
+                frozen,
+                ClassifyNodeKind(obj),
+                nick));
         }
 
         var nodeSet = nodes.Select(n => n.Id).ToHashSet();
         var edges = new List<LayoutEdge>();
-        var edgeSet = new HashSet<(Guid, Guid)>();
+        var edgeSet = new HashSet<(Guid, Guid, LayoutEdgeRole)>();
 
-        void AddEdge(Guid from, Guid to)
+        void AddEdge(Guid from, Guid to, LayoutEdgeRole role)
         {
             if (from == to || !nodeSet.Contains(from) || !nodeSet.Contains(to))
             {
                 return;
             }
 
-            if (edgeSet.Add((from, to)))
+            // Prefer Data if both roles appear on the same pair.
+            var key = (from, to, role);
+            if (role == LayoutEdgeRole.Display && edgeSet.Contains((from, to, LayoutEdgeRole.Data)))
             {
-                edges.Add(new LayoutEdge(from, to));
+                return;
+            }
+
+            if (role == LayoutEdgeRole.Data)
+            {
+                edgeSet.Remove((from, to, LayoutEdgeRole.Display));
+                edges.RemoveAll(e => e.From == from && e.To == to && e.Role == LayoutEdgeRole.Display);
+            }
+
+            if (edgeSet.Add(key))
+            {
+                edges.Add(new LayoutEdge(from, to, role));
             }
         }
 
@@ -294,6 +338,7 @@ public static class OrganizeTools
                     continue;
                 }
 
+                var role = ClassifyEdgeRole(obj, param);
                 foreach (var src in param.Sources)
                 {
                     if (src == null)
@@ -303,12 +348,56 @@ public static class OrganizeTools
 
                     var fromOwner = ResolveOwnerGuid(src);
                     var toOwner = obj.InstanceGuid;
-                    AddEdge(fromOwner, toOwner);
+                    AddEdge(fromOwner, toOwner, role);
                 }
             }
         }
 
         return (nodes, edges, memberships, expandedGrouped);
+    }
+
+    private static LayoutNodeKind ClassifyNodeKind(IGH_DocumentObject obj)
+    {
+        if (obj is GH_Scribble)
+        {
+            return LayoutNodeKind.Chrome;
+        }
+
+        if (obj is GH_Panel)
+        {
+            return LayoutNodeKind.Panel;
+        }
+
+        if (obj is GH_NumberSlider)
+        {
+            return LayoutNodeKind.Slider;
+        }
+
+        var name = obj.Name ?? string.Empty;
+        if (name.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LayoutNodeKind.Other;
+        }
+
+        return LayoutNodeKind.Compute;
+    }
+
+    private static LayoutEdgeRole ClassifyEdgeRole(IGH_DocumentObject toObj, IGH_Param param)
+    {
+        var name = toObj.Name ?? string.Empty;
+        if (name.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LayoutEdgeRole.Display;
+        }
+
+        var nick = param.NickName ?? param.Name ?? string.Empty;
+        if (nick.IndexOf("prev", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            nick.IndexOf("draw", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LayoutEdgeRole.Display;
+        }
+
+        return LayoutEdgeRole.Data;
     }
 
     private static IEnumerable<Guid> ExpandLeaves(

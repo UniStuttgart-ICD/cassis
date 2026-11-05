@@ -16,10 +16,11 @@ Lay out the active Grasshopper document by **computational blocks** (function-li
 ## Steps
 
 1. Call `Get_AllComponents` and `GetAllConnections` for context. Do not trust connections alone for layout. `Organize_Canvas` walks param Sources itself so panels and sliders count.
-2. Call `Organize_Canvas` with `apply` false. Optional: `proposeGroups` true (only larger clusters). Optional: `componentIds` to limit the move set. Use `layoutMode` `reflow` only when the user wants a full island strip.
-3. Read `moves`, `wireHides`, `warnings`, and `groupCandidates`. Give each candidate a short purpose name (one job per block). Skip tiny clusters and already-grouped ids.
-4. Call `Organize_Canvas` again with `apply` true and `namedGroupsJson` as a JSON array of `{ "name", "componentIds", "color?" }`. Apply hides long wires (`GH_ParamWireDisplay.hidden` on destination params). Each named group gets a Consolas Scribble (uppercase) at the top-left and a `GH_Group` that includes the scribble.
-5. Call `Capture_Canvas` or `Canvas_Snapshot` to check the result.
+2. Call `Organize_Canvas` with `apply` false and `proposeGroups` true. Optional: `componentIds` to limit the move set. Use `layoutMode` `reflow` only when the user wants a full island strip.
+3. Read **`graph`** first: typed kinds, data vs display edge counts, and **Leiden modules** (SOTA communities on a weighted projection: data edges + weak spatial bridges; display edges down-weighted). Then read `groupCandidates`, `moves`, `wireHides`, `warnings`.
+4. Name each module/candidate with a short purpose (one job per block). Prefer `graph.modules` ids over inventing new cuts. Skip tiny clusters and already-grouped ids.
+5. Call `Organize_Canvas` again with `apply` true and `namedGroupsJson` as a JSON array of `{ "name", "componentIds", "color?" }`. Apply hides long wires (`GH_ParamWireDisplay.hidden` on destination params). Each named group gets a Consolas Scribble (uppercase) at the top-left and a `GH_Group` that includes the scribble.
+6. Call `Capture_Canvas` or `Canvas_Snapshot` to check the result.
 
 ## Rules
 
@@ -34,6 +35,6 @@ Lay out the active Grasshopper document by **computational blocks** (function-li
 ## Gaps
 
 - Does not route wires (only hides long ones).
-- Does not run Leiden or Infomap. You name the blocks.
+- Leiden modules are algorithmic — you still supply human/agent names.
 - Nested sub-group trees are out of scope. Flat group plus scribble only.
 - Pin align uses component pivots (not exact grip pixels).

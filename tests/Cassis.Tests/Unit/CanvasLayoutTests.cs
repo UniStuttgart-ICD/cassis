@@ -204,8 +204,53 @@ public class CanvasLayoutTests
             Array.Empty<LayoutMembership>(),
             proposeGroups: true);
 
+        Assert.That(plan.Graph, Is.Not.Null);
+        Assert.That(plan.Graph!.Method, Is.EqualTo("leiden-modularity"));
         Assert.That(plan.GroupCandidates.Count, Is.GreaterThan(1));
         Assert.That(plan.GroupCandidates.All(c => c.ComponentIds.Count <= CanvasLayout.MaxCandidateSize), Is.True);
+    }
+
+    [Test]
+    public void Leiden_SeparatesTwoDenseCliques()
+    {
+        // Two triangles far apart — communities should not merge.
+        var nodes = new[]
+        {
+            Node(1, 0, 0), Node(2, 40, 0), Node(3, 20, 40),
+            Node(4, 2000, 0), Node(5, 2040, 0), Node(6, 2020, 40),
+        };
+        var edges = new[]
+        {
+            new LayoutEdge(G(1), G(2)), new LayoutEdge(G(2), G(3)), new LayoutEdge(G(3), G(1)),
+            new LayoutEdge(G(4), G(5)), new LayoutEdge(G(5), G(6)), new LayoutEdge(G(6), G(4)),
+        };
+
+        var snap = CanvasGraphAnalysis.Analyze(nodes, edges);
+        Assert.That(snap.Modules.Count, Is.GreaterThanOrEqualTo(2));
+        var sets = snap.Modules.Select(m => m.MemberIds.ToHashSet()).ToList();
+        Assert.That(sets.Any(s => s.Contains(G(1)) && s.Contains(G(2)) && s.Contains(G(3))), Is.True);
+        Assert.That(sets.Any(s => s.Contains(G(4)) && s.Contains(G(5)) && s.Contains(G(6))), Is.True);
+    }
+
+    [Test]
+    public void Analyze_DownweightsDisplayEdgesInKindCounts()
+    {
+        var nodes = new[]
+        {
+            new LayoutNode(G(1), 0, 0, 80, 40, Kind: LayoutNodeKind.Compute),
+            new LayoutNode(G(2), 100, 0, 80, 40, Kind: LayoutNodeKind.Other),
+            new LayoutNode(G(3), 0, 100, 80, 40, Kind: LayoutNodeKind.Chrome, Frozen: true),
+        };
+        var edges = new[]
+        {
+            new LayoutEdge(G(1), G(2), LayoutEdgeRole.Display),
+            new LayoutEdge(G(1), G(2), LayoutEdgeRole.Data),
+        };
+
+        var snap = CanvasGraphAnalysis.Analyze(nodes, edges);
+        Assert.That(snap.DisplayEdgeCount, Is.EqualTo(1));
+        Assert.That(snap.DataEdgeCount, Is.EqualTo(1));
+        Assert.That(snap.KindCounts.ContainsKey("compute"), Is.True);
     }
 
     [Test]
