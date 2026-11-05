@@ -100,7 +100,7 @@ public class CanvasLayoutTests
     }
 
     [Test]
-    public void Supernode_PreservesRelativeOffsets()
+    public void Supernode_KeepsMembersClustered()
     {
         var groupId = G(99);
         var nodes = new[]
@@ -124,9 +124,11 @@ public class CanvasLayoutTests
         var plan = CanvasLayout.Compute(nodes, edges, groups);
         var m3 = plan.Moves.First(m => m.Id == G(3));
         var m4 = plan.Moves.First(m => m.Id == G(4));
-
-        Assert.That(m4.ToX - m3.ToX, Is.EqualTo(20f).Within(0.1f));
-        Assert.That(m4.ToY - m3.ToY, Is.EqualTo(20f).Within(0.1f));
+        var dx = Math.Abs(m4.ToX - m3.ToX);
+        var dy = Math.Abs(m4.ToY - m3.ToY);
+        // Members stay one tight tile (packed), not scattered across stages.
+        Assert.That(dx + dy, Is.LessThan(200f));
+        Assert.That(plan.Supernodes.Any(s => s.GroupId == groupId), Is.True);
     }
 
     [Test]
@@ -324,6 +326,86 @@ public class CanvasLayoutTests
     }
 
     [Test]
+    public void Compact_BarycentricUncrossesTwoHop()
+    {
+        // A──→D   crossed desired wiring; barycentric should keep A/D and B/C aligned in Y order.
+        // B──→C
+        var nodes = new[]
+        {
+            Node(1, 0, 0),   // A
+            Node(2, 0, 80),  // B
+            Node(3, 200, 0), // C (initially same Y as A — crossed vs B→C intent)
+            Node(4, 200, 80),// D
+        };
+        var edges = new[]
+        {
+            new LayoutEdge(G(1), G(4)), // A→D
+            new LayoutEdge(G(2), G(3)), // B→C
+        };
+
+        var plan = CanvasLayout.Compute(nodes, edges, Array.Empty<LayoutMembership>());
+        float Y(int id)
+        {
+            var m = plan.Moves.FirstOrDefault(x => x.Id == G(id));
+            return m?.ToY ?? nodes.First(n => n.Id == G(id)).PivotY;
+        }
+
+        // A above B ⇒ D above C (uncrossed A→D / B→C).
+        Assert.That((Y(1) < Y(2) && Y(4) <= Y(3) + 1f) || (Y(1) > Y(2) && Y(4) >= Y(3) - 1f), Is.True,
+            $"crossed: A={Y(1):0} B={Y(2):0} C={Y(3):0} D={Y(4):0}");
+    }
+
+    [Test]
+    public void Compact_SeparatesStackedDisconnectedIslands()
+    {
+        // Two independent chains piled on the same spot — compact must not leave AABBs overlapping.
+        var nodes = new[]
+        {
+            Node(1, 0, 0),
+            Node(2, 20, 0),
+            Node(3, 5, 5),
+            Node(4, 25, 5),
+        };
+        var edges = new[]
+        {
+            new LayoutEdge(G(1), G(2)),
+            new LayoutEdge(G(3), G(4)),
+        };
+
+        var plan = CanvasLayout.Compute(nodes, edges, Array.Empty<LayoutMembership>());
+        (float X, float Y, float W, float H) Box(int id)
+        {
+            var n = nodes.First(x => x.Id == G(id));
+            var m = plan.Moves.FirstOrDefault(x => x.Id == G(id));
+            var x = m?.ToX ?? n.PivotX;
+            var y = m?.ToY ?? n.PivotY;
+            return (x, y, n.Width, n.Height);
+        }
+
+        (float MinX, float MinY, float MaxX, float MaxY) BoundsOf(params int[] ids)
+        {
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+            foreach (var id in ids)
+            {
+                var b = Box(id);
+                minX = Math.Min(minX, b.X - b.W * 0.5f);
+                minY = Math.Min(minY, b.Y - b.H * 0.5f);
+                maxX = Math.Max(maxX, b.X + b.W * 0.5f);
+                maxY = Math.Max(maxY, b.Y + b.H * 0.5f);
+            }
+
+            return (minX, minY, maxX, maxY);
+        }
+
+        var a = BoundsOf(1, 2);
+        var b = BoundsOf(3, 4);
+        var overlapX = Math.Min(a.MaxX, b.MaxX) - Math.Max(a.MinX, b.MinX);
+        var overlapY = Math.Min(a.MaxY, b.MaxY) - Math.Max(a.MinY, b.MinY);
+        Assert.That(overlapX <= 0f || overlapY <= 0f, Is.True,
+            $"islands still overlap ox={overlapX} oy={overlapY}");
+    }
+
+    [Test]
     public void WireHide_EmitsHintsWhenHopStaysLong()
     {
         // Frozen source far left; movable sink cluster packs in place → long hop remains.
@@ -504,13 +586,24 @@ public class CanvasLayoutTests
                 stopsJson.Append(',');
             }
 
+            var stageArr = new int[nodes.Count];
+            for (var i = 0; i < nodes.Count; i++)
+            {
+                stageArr[i] = packed.StageByNode != null
+                    && packed.StageByNode.TryGetValue(nodes[i].Id, out var st)
+                    ? st
+                    : 0;
+            }
+
             stopsJson.Append("{\"col\":")
                 .Append(col.ToString("0", CultureInfo.InvariantCulture))
                 .Append(",\"row\":")
                 .Append(row.ToString("0", CultureInfo.InvariantCulture))
                 .Append(",\"xy\":")
                 .Append(Arr(FlatXy(packed)))
-                .Append('}');
+                .Append(",\"stage\":[")
+                .Append(string.Join(",", stageArr))
+                .Append("]}");
             TestContext.Out.WriteLine($"stop {col:0}/{row:0} moves={packed.Moves.Count}");
         }
 
@@ -566,6 +659,8 @@ public class CanvasLayoutTests
             .Append("],\"edges\":[")
             .Append(string.Join(",", edgeIdx.Select(p => $"[{p[0]},{p[1]}]")))
             .Append("],\"groups\":").Append(groupsJson)
+            .Append(",\"wireHide\":")
+            .Append(CanvasLayout.DefaultWireHideLength.ToString("0", CultureInfo.InvariantCulture))
             .Append(",\"before\":").Append(Arr(beforeXy))
             .Append(",\"stops\":").Append(stopsJson)
             .Append('}');

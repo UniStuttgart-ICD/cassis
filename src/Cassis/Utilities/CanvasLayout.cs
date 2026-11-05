@@ -21,9 +21,9 @@ public enum LayoutMode
 /// </summary>
 public static class CanvasLayout
 {
-    // Sparse default (LCRL pick): 280/40 ≈ W×1.9; tighter stops stay on the density scrubber.
-    public const float DefaultColumnGap = 280f;
-    public const float DefaultRowGap = 40f;
+    // Shelf-of-blocks default: 120/24 stays readable; 280/40 is still on the density scrubber (sparse).
+    public const float DefaultColumnGap = 120f;
+    public const float DefaultRowGap = 24f;
     public const float DefaultTitleBand = 48f;
     public const float DefaultIslandGap = 120f;
     public const float DefaultWireHideLength = 720f;
@@ -111,6 +111,17 @@ public static class CanvasLayout
             }
         }
 
+        // Repack members inside each GH group so supernodes are tight tiles (not old sprawl AABBs).
+        var groupLocal = TightenGroupMembers(
+            unitMembers,
+            unitSizes,
+            unitPivot,
+            edges,
+            byId,
+            columnGap,
+            rowGap,
+            warnings);
+
         var unitEdges = new List<(Guid From, Guid To)>();
         foreach (var e in edges)
         {
@@ -131,6 +142,7 @@ public static class CanvasLayout
         var needsTitle = BuildNeedsTitle(movable, unitOf, unitMembers, namedGroups);
         var islands = WeaklyConnectedIslands(movable, unitEdges);
         var unitTarget = new Dictionary<Guid, (float X, float Y)>();
+        var unitStage = new Dictionary<Guid, int>();
 
         // Original global AABB for extent-growth warning
         var oldBounds = UnitBounds(movable, unitPivot, unitSizes);
@@ -150,8 +162,10 @@ public static class CanvasLayout
                     rowGap,
                     titleBand,
                     unitTarget,
+                    unitStage,
                     warnings);
             }
+
         }
         else
         {
@@ -169,6 +183,7 @@ public static class CanvasLayout
                     rowGap,
                     titleBand,
                     unitTarget,
+                    unitStage,
                     warnings);
                 var localBounds = UnitBounds(island, unitTarget, unitSizes);
                 var oldCy = island.Average(u => unitPivot[u].Y);
@@ -185,30 +200,62 @@ public static class CanvasLayout
             }
         }
 
-        var leafTarget = ExpandToLeaves(movable, unitMembers, unitPivot, unitTarget, byId);
-
-        // Deference: restore leaf centroids (component pivots), not unit AABB means.
-        if (mode == LayoutMode.Compact)
+        var leafTarget = ExpandToLeaves(movable, unitMembers, unitPivot, unitTarget, byId, groupLocal);
+        var leafStage = new Dictionary<Guid, int>();
+        foreach (var u in movable)
         {
-            foreach (var island in islands)
+            if (!unitStage.TryGetValue(u, out var stage) || !unitMembers.TryGetValue(u, out var members))
             {
-                var leaves = island
-                    .SelectMany(u => unitMembers[u])
-                    .Where(leafTarget.ContainsKey)
-                    .ToHashSet();
-                if (leaves.Count == 0)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                var oldLeaf = leaves.ToDictionary(id => id, id => (byId[id].PivotX, byId[id].PivotY));
-                AnchorCentroid(leaves, oldLeaf, leafTarget);
+            foreach (var mid in members)
+            {
+                if (leafTarget.ContainsKey(mid))
+                {
+                    leafStage[mid] = stage;
+                }
             }
         }
-        else
+
+        // One global centroid park (per-island park undoes inter-island separation).
+        var leaves = leafTarget.Keys.ToHashSet();
+        var oldLeaf = leaves.ToDictionary(id => id, id => (byId[id].PivotX, byId[id].PivotY));
+        AnchorCentroid(leaves, oldLeaf, leafTarget);
+
+        if (mode == LayoutMode.Compact)
         {
-            var leaves = leafTarget.Keys.ToHashSet();
-            var oldLeaf = leaves.ToDictionary(id => id, id => (byId[id].PivotX, byId[id].PivotY));
+            var leafSizes = leaves.ToDictionary(id => id, id => (byId[id].Width, byId[id].Height));
+            var oldLeafBounds = LeafBounds(oldLeaf, byId);
+            ShelfPlaceSets(
+                islands
+                    .Select(island =>
+                    {
+                        var members = island
+                            .SelectMany(u => unitMembers[u])
+                            .Where(leaves.Contains)
+                            .ToList();
+                        float cx = 0, cy = 0;
+                        foreach (var id in members)
+                        {
+                            var o = oldLeaf[id];
+                            cx += o.PivotX;
+                            cy += o.PivotY;
+                        }
+
+                        var inv = members.Count > 0 ? 1f / members.Count : 1f;
+                        return (Members: (IReadOnlyCollection<Guid>)members, Cx: cx * inv, Cy: cy * inv);
+                    })
+                    .Where(t => t.Members.Count > 0)
+                    .OrderBy(t => t.Cx)
+                    .ThenBy(t => t.Cy)
+                    .Select(t => t.Members)
+                    .ToList(),
+                leafTarget,
+                leafSizes,
+                Math.Max(rowGap, columnGap * 0.25f),
+                oldLeafBounds);
+            // Shelf place shifts the doc — re-park global centroid without restacking islands.
             AnchorCentroid(leaves, oldLeaf, leafTarget);
         }
 
@@ -249,12 +296,20 @@ public static class CanvasLayout
 
         var scribbles = BuildScribbles(namedGroups, byId, leafTarget, titleBand);
 
-        return new LayoutPlan(moves.ToArray(), supernodes, candidates, scribbles, wireHides, warnings);
+        return new LayoutPlan(
+            moves.ToArray(),
+            supernodes,
+            candidates,
+            scribbles,
+            wireHides,
+            warnings,
+            leafStage);
     }
 
     /// <summary>
-    /// Split WCC into function-sized blocks, pack each L→R with pin align, park on old centroids.
-    /// Avoids unfurling a whole document into one megastrip.
+    /// Split WCC into function-sized blocks, pack each L→R with pin align,
+    /// shelf-place blocks by rank (not per-block centroid park — that restacks the mess),
+    /// then park the whole island on its old centroid.
     /// </summary>
     private static void PackIslandBlocks(
         HashSet<Guid> island,
@@ -266,6 +321,7 @@ public static class CanvasLayout
         float rowGap,
         float titleBand,
         Dictionary<Guid, (float X, float Y)> unitTarget,
+        Dictionary<Guid, int> unitStage,
         List<string> warnings)
     {
         var rankHint = LongestPathRanks(island, unitEdges);
@@ -286,6 +342,7 @@ public static class CanvasLayout
         // Density follows columnGap (was floored at 80 and capped growth at 1.75 → always sparse).
         var blockColGap = Math.Max(36f, Math.Min(columnGap, columnGap * 0.65f + 24f));
         var widthCap = Math.Min(MaxExtentGrowth, Math.Max(1.1f, 1.05f + columnGap / 400f));
+        var blockGap = Math.Max(rowGap * 1.5f, columnGap * 0.45f);
 
         foreach (var block in blocks)
         {
@@ -313,32 +370,44 @@ public static class CanvasLayout
                     var p = local[u];
                     local[u] = (cx + (p.X - cx) * sx, p.Y);
                 }
+
+                packed = UnitBounds(block, local, unitSizes);
             }
 
-            // Deference: keep each function near where it already lived.
-            float oldCx = 0, oldCy = 0, newCx = 0, newCy = 0;
-            foreach (var u in block)
-            {
-                oldCx += unitPivot[u].X;
-                oldCy += unitPivot[u].Y;
-                newCx += local[u].X;
-                newCy += local[u].Y;
-            }
-
-            var inv = 1f / block.Count;
-            var dx = oldCx * inv - newCx * inv;
-            var dy = oldCy * inv - newCy * inv;
+            // Normalize to origin — rank-column placer assigns world slots.
             foreach (var u in block)
             {
                 var p = local[u];
-                unitTarget[u] = (p.X + dx, p.Y + dy);
+                unitTarget[u] = (p.X - packed.MinX, p.Y - packed.MinY);
             }
         }
 
-        // Overlap nudge skipped: pushing stacks blew height on dense docs; centroid park is enough.
-
         var oldB = UnitBounds(island, unitPivot, unitSizes);
+
+        // Rank columns: same-rank functions stack vertically, columns advance L→R.
+        PlaceBlocksInRankColumns(
+            blocks,
+            rankHint,
+            unitPivot,
+            unitTarget,
+            unitSizes,
+            blockGap,
+            unitStage); // records hierarchy stage per unit
+
+        // Global Y barycentric after block shelf — cuts crossings MedianSweep lost between blocks.
+        BarycentricNudgeY(island, unitEdges, unitTarget, unitSizes, rankHint, rowGap);
+
+        // Park the whole island, not each block (keeps column grid intact).
         var newB = UnitBounds(island, unitTarget, unitSizes);
+        var ox = (oldB.MinX + oldB.Width * 0.5f) - (newB.MinX + newB.Width * 0.5f);
+        var oy = (oldB.MinY + oldB.Height * 0.5f) - (newB.MinY + newB.Height * 0.5f);
+        foreach (var u in island)
+        {
+            var p = unitTarget[u];
+            unitTarget[u] = (p.X + ox, p.Y + oy);
+        }
+
+        newB = UnitBounds(island, unitTarget, unitSizes);
         if (oldB.Width > 1f && newB.Width > oldB.Width * MaxExtentGrowth)
         {
             warnings.Add(
@@ -349,6 +418,187 @@ public static class CanvasLayout
         {
             warnings.Add(
                 $"Block pack height grew {newB.Height / oldB.Height:0.0}×. Prefer a smaller selection or reflow.");
+        }
+    }
+
+    /// <summary>
+    /// Place packed function blocks into hierarchical stages (L→R).
+    /// Stages are balanced by block count so one mid-rank bucket cannot dominate.
+    /// Tall stages wrap to a sub-lane (same stage).
+    /// </summary>
+    private static void PlaceBlocksInRankColumns(
+        List<HashSet<Guid>> blocks,
+        Dictionary<Guid, int> rankHint,
+        Dictionary<Guid, (float X, float Y)> unitPivot,
+        Dictionary<Guid, (float X, float Y)> target,
+        Dictionary<Guid, (float W, float H)> sizes,
+        float gap,
+        Dictionary<Guid, int> unitStage)
+    {
+        if (blocks.Count == 0)
+        {
+            return;
+        }
+
+        float MeanRank(HashSet<Guid> b)
+        {
+            float s = 0;
+            foreach (var u in b)
+            {
+                s += rankHint.TryGetValue(u, out var r) ? r : 0;
+            }
+
+            return s / Math.Max(1, b.Count);
+        }
+
+        int RawRank(HashSet<Guid> b) => (int)Math.Round(MeanRank(b));
+
+        var ordered = blocks
+            .OrderBy(MeanRank)
+            .ThenBy(b => b.Average(u => unitPivot[u].Y))
+            .ThenBy(b => b.Average(u => unitPivot[u].X))
+            .ToList();
+
+        var rankGroups = ordered
+            .GroupBy(RawRank)
+            .OrderBy(g => g.Key)
+            .Select(g => g
+                .OrderBy(b => b.Average(u => unitPivot[u].Y))
+                .ThenBy(b => b.Average(u => unitPivot[u].X))
+                .ToList())
+            .ToList();
+
+        // Prefer more columns than √n when ranks allow — clearer L→R hierarchy.
+        var maxStages = Math.Max(
+            8,
+            Math.Min(rankGroups.Count, (int)Math.Ceiling(Math.Sqrt(ordered.Count * 1.6) + 2)));
+        var targetPerStage = Math.Max(1, (int)Math.Ceiling(ordered.Count / (double)maxStages));
+
+        var stages = new List<List<HashSet<Guid>>>();
+        var cur = new List<HashSet<Guid>>();
+        foreach (var group in rankGroups)
+        {
+            if (cur.Count > 0
+                && cur.Count + group.Count > targetPerStage
+                && stages.Count < maxStages - 1)
+            {
+                stages.Add(cur);
+                cur = new List<HashSet<Guid>>();
+            }
+
+            cur.AddRange(group);
+        }
+
+        if (cur.Count > 0)
+        {
+            stages.Add(cur);
+        }
+
+        var allHeights = ordered.Select(b => UnitBounds(b, target, sizes).Height).OrderBy(h => h).ToList();
+        var medianBlockH = allHeights[allHeights.Count / 2];
+        var maxColumnHeight = Math.Max(1100f, medianBlockH * 10f + gap * 9f);
+        var stageGap = Math.Max(gap * 1.75f, gap + 48f);
+
+        float cursorX = 0f;
+        for (var stageIndex = 0; stageIndex < stages.Count; stageIndex++)
+        {
+            var stageBlocks = stages[stageIndex];
+            float laneX = cursorX;
+            float cursorY = 0f;
+            float colW = 0f;
+            float stageMaxX = cursorX;
+
+            foreach (var block in stageBlocks)
+            {
+                var b = UnitBounds(block, target, sizes);
+                if (cursorY > 0f && cursorY + b.Height > maxColumnHeight)
+                {
+                    laneX = stageMaxX + gap * 0.85f;
+                    cursorY = 0f;
+                    colW = 0f;
+                }
+
+                var dx = laneX - b.MinX;
+                var dy = cursorY - b.MinY;
+                foreach (var id in block)
+                {
+                    var p = target[id];
+                    target[id] = (p.X + dx, p.Y + dy);
+                    unitStage[id] = stageIndex;
+                }
+
+                var placed = UnitBounds(block, target, sizes);
+                cursorY = placed.MaxY + gap;
+                colW = Math.Max(colW, placed.Width);
+                stageMaxX = Math.Max(stageMaxX, laneX + colW);
+            }
+
+            cursorX = stageMaxX + stageGap;
+        }
+    }
+
+    /// <summary>
+    /// Place packed sets L→R in the given order, wrap using oldExtent.Width as row budget
+    /// (or strip/√n when that width is tiny). Keeps relative layout inside each set.
+    /// </summary>
+    private static void ShelfPlaceSets(
+        IReadOnlyList<IReadOnlyCollection<Guid>> sets,
+        Dictionary<Guid, (float X, float Y)> target,
+        Dictionary<Guid, (float W, float H)> sizes,
+        float gap,
+        Bounds oldExtent)
+    {
+        if (sets.Count < 2)
+        {
+            return;
+        }
+
+        float stripW = 0f;
+        var bounds = new Bounds[sets.Count];
+        for (var i = 0; i < sets.Count; i++)
+        {
+            bounds[i] = UnitBounds(sets[i], target, sizes);
+            stripW += bounds[i].Width + gap;
+        }
+
+        stripW = Math.Max(0f, stripW - gap);
+        var rows = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(sets.Count)));
+        // Prefer caller row budget (area-based); fall back to strip/√n.
+        var rowWidth = oldExtent.Width > 1f
+            ? oldExtent.Width
+            : Math.Max(1f, stripW / rows);
+
+        var cursorX = oldExtent.MinX;
+        var cursorY = oldExtent.MinY;
+        var rowH = 0f;
+        var rowStarted = false;
+
+        for (var i = 0; i < sets.Count; i++)
+        {
+            var b = bounds[i];
+            if (b.Width < 1f && b.Height < 1f)
+            {
+                continue;
+            }
+
+            if (rowStarted && cursorX + b.Width > oldExtent.MinX + rowWidth)
+            {
+                cursorX = oldExtent.MinX;
+                cursorY += rowH + gap;
+                rowH = 0f;
+            }
+
+            var dx = cursorX - b.MinX;
+            var dy = cursorY - b.MinY;
+            foreach (var id in sets[i])
+            {
+                var p = target[id];
+                target[id] = (p.X + dx, p.Y + dy);
+            }
+
+            cursorX += b.Width + gap;
+            rowH = Math.Max(rowH, b.Height);
+            rowStarted = true;
         }
     }
 
@@ -475,7 +725,7 @@ public static class CanvasLayout
         List<string> warnings)
     {
         var (layers, adjOut, adjIn) = BuildRankedLayers(island, unitEdges, unitPivot, warnings);
-        MedianSweep(layers, adjOut, adjIn);
+        MedianSweep(layers, adjOut, adjIn, sweeps: 6);
 
         var medianH = island.Select(u => unitSizes[u].H).OrderBy(h => h).ElementAt(island.Count / 2);
         var maxColumnHeight = Math.Max(480f, medianH * 12f + rowGap * 11f);
@@ -765,7 +1015,8 @@ public static class CanvasLayout
         Dictionary<Guid, List<Guid>> unitMembers,
         Dictionary<Guid, (float X, float Y)> unitPivot,
         Dictionary<Guid, (float X, float Y)> unitTarget,
-        Dictionary<Guid, LayoutNode> byId)
+        Dictionary<Guid, LayoutNode> byId,
+        Dictionary<Guid, (float X, float Y)> groupLocal)
     {
         var leafTarget = new Dictionary<Guid, (float X, float Y)>();
         foreach (var u in movable)
@@ -782,6 +1033,19 @@ public static class CanvasLayout
                 continue;
             }
 
+            // Prefer tightened local offsets; fall back to rigid translate of the old pose.
+            var useLocal = members.All(groupLocal.ContainsKey);
+            if (useLocal)
+            {
+                foreach (var mid in members)
+                {
+                    var o = groupLocal[mid];
+                    leafTarget[mid] = (t.X + o.X, t.Y + o.Y);
+                }
+
+                continue;
+            }
+
             var old = unitPivot[u];
             var dx = t.X - old.X;
             var dy = t.Y - old.Y;
@@ -793,6 +1057,90 @@ public static class CanvasLayout
         }
 
         return leafTarget;
+    }
+
+    /// <summary>
+    /// Pack leaves inside each multi-member group into a tight L→R block.
+    /// Updates unitSizes to the packed footprint; returns offsets from the unit center.
+    /// </summary>
+    private static Dictionary<Guid, (float X, float Y)> TightenGroupMembers(
+        Dictionary<Guid, List<Guid>> unitMembers,
+        Dictionary<Guid, (float W, float H)> unitSizes,
+        Dictionary<Guid, (float X, float Y)> unitPivot,
+        IReadOnlyList<LayoutEdge> edges,
+        Dictionary<Guid, LayoutNode> byId,
+        float columnGap,
+        float rowGap,
+        List<string> warnings)
+    {
+        var local = new Dictionary<Guid, (float X, float Y)>();
+        var innerGap = Math.Max(24f, Math.Min(columnGap * 0.45f, 80f));
+        var tightened = 0;
+
+        foreach (var kv in unitMembers)
+        {
+            var unitId = kv.Key;
+            var members = kv.Value;
+            if (members.Count == 1 && members[0] == unitId)
+            {
+                continue;
+            }
+
+            var memberSet = members.ToHashSet();
+            var memberSizes = members.ToDictionary(m => m, m => (byId[m].Width, byId[m].Height));
+            var ranks = LongestPathRanks(memberSet, edges);
+            var ordered = members
+                .OrderBy(m => ranks.TryGetValue(m, out var r) ? r : 0)
+                .ThenBy(m => byId[m].PivotY)
+                .ThenBy(m => byId[m].PivotX)
+                .ToList();
+
+            // Simple rank columns — avoid nested PackIslandReflow on every group.
+            var packed = new Dictionary<Guid, (float X, float Y)>();
+            var byRank = ordered
+                .GroupBy(m => ranks.TryGetValue(m, out var r) ? r : 0)
+                .OrderBy(g => g.Key)
+                .ToList();
+            float cursorX = 0f;
+            foreach (var band in byRank)
+            {
+                float cursorY = 0f;
+                float colW = 0f;
+                foreach (var m in band)
+                {
+                    var (w, h) = memberSizes[m];
+                    packed[m] = (cursorX + w * 0.5f, cursorY + h * 0.5f);
+                    cursorY += h + rowGap;
+                    colW = Math.Max(colW, w);
+                }
+
+                cursorX += colW + innerGap;
+            }
+
+            var bounds = UnitBounds(memberSet, packed, memberSizes);
+            var cx = bounds.MinX + bounds.Width * 0.5f;
+            var cy = bounds.MinY + bounds.Height * 0.5f;
+            foreach (var m in members)
+            {
+                var p = packed[m];
+                local[m] = (p.X - cx, p.Y - cy);
+            }
+
+            var oldSize = unitSizes[unitId];
+            // Keep unitPivot (old centroid) so AnchorCentroid parks the group near home.
+            unitSizes[unitId] = (Math.Max(20f, bounds.Width), Math.Max(20f, bounds.Height));
+            if (oldSize.W * oldSize.H > unitSizes[unitId].W * unitSizes[unitId].H * 1.4f)
+            {
+                tightened++;
+            }
+        }
+
+        if (tightened > 0)
+        {
+            warnings.Add($"Tightened {tightened} group supernode(s) to packed member bounds.");
+        }
+
+        return local;
     }
 
     private static void AnchorCentroid(
@@ -1022,10 +1370,11 @@ public static class CanvasLayout
     private static void MedianSweep(
         Dictionary<int, List<Guid>> layers,
         Dictionary<Guid, List<Guid>> adjOut,
-        Dictionary<Guid, List<Guid>> adjIn)
+        Dictionary<Guid, List<Guid>> adjIn,
+        int sweeps = 2)
     {
         var keys = layers.Keys.OrderBy(k => k).ToList();
-        for (var sweep = 0; sweep < 2; sweep++)
+        for (var sweep = 0; sweep < sweeps; sweep++)
         {
             for (var i = 1; i < keys.Count; i++)
             {
@@ -1035,6 +1384,73 @@ public static class CanvasLayout
             for (var i = keys.Count - 2; i >= 0; i--)
             {
                 OrderByMedian(layers[keys[i]], adjOut, layers);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pull each unit's Y toward the median of its neighbors (barycentric), then de-overlap
+    /// within the same rank. Keeps X from column placement.
+    /// </summary>
+    private static void BarycentricNudgeY(
+        HashSet<Guid> island,
+        List<(Guid From, Guid To)> unitEdges,
+        Dictionary<Guid, (float X, float Y)> target,
+        Dictionary<Guid, (float W, float H)> sizes,
+        Dictionary<Guid, int> rankHint,
+        float rowGap)
+    {
+        var adj = island.ToDictionary(u => u, _ => new List<Guid>());
+        foreach (var (from, to) in unitEdges)
+        {
+            if (!island.Contains(from) || !island.Contains(to))
+            {
+                continue;
+            }
+
+            adj[from].Add(to);
+            adj[to].Add(from);
+        }
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            foreach (var u in island)
+            {
+                var ns = adj[u];
+                if (ns.Count == 0)
+                {
+                    continue;
+                }
+
+                var ys = ns.Select(n => target[n].Y).OrderBy(y => y).ToList();
+                var med = ys[ys.Count / 2];
+                var cur = target[u];
+                // Blend so one pass does not yank a whole column apart.
+                target[u] = (cur.X, cur.Y * 0.35f + med * 0.65f);
+            }
+
+            foreach (var layer in island.GroupBy(u => rankHint.TryGetValue(u, out var r) ? r : 0))
+            {
+                var ordered = layer.OrderBy(u => target[u].Y).ThenBy(u => u).ToList();
+                for (var i = 1; i < ordered.Count; i++)
+                {
+                    var prev = ordered[i - 1];
+                    var cur = ordered[i];
+                    // Only resolve when they share an X lane (same column).
+                    if (Math.Abs(target[prev].X - target[cur].X) > Math.Max(sizes[prev].W, sizes[cur].W))
+                    {
+                        continue;
+                    }
+
+                    var prevBottom = target[prev].Y + sizes[prev].H * 0.5f;
+                    var curTop = target[cur].Y - sizes[cur].H * 0.5f;
+                    var need = prevBottom + rowGap - curTop;
+                    if (need > 0)
+                    {
+                        var t = target[cur];
+                        target[cur] = (t.X, t.Y + need);
+                    }
+                }
             }
         }
     }
@@ -1272,4 +1688,5 @@ public sealed record LayoutPlan(
     IReadOnlyList<GroupCandidate> GroupCandidates,
     IReadOnlyList<ScribblePlan> Scribbles,
     IReadOnlyList<WireHideHint> WireHides,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyDictionary<Guid, int>? StageByNode = null);
