@@ -1,6 +1,7 @@
 # Cassis MCP Configuration by Framework
 
 Cassis runs an HTTP MCP server at `http://localhost:3003/mcp/`.
+One URL serves every open Rhino, on Mac and Windows. Tool calls need the header `X-Cassis-Root` set to the project folder. A missing header is refused.
 Configure it as HTTP or Streamable HTTP, not stdio.
 
 ## Codex
@@ -71,7 +72,10 @@ Create or edit `.cursor/mcp.json` in the project root (or `~/.cursor/mcp.json` f
   "mcpServers": {
     "cassis": {
       "type": "url",
-      "url": "http://localhost:3003/mcp/"
+      "url": "http://localhost:3003/mcp/",
+      "headers": {
+        "X-Cassis-Root": "${workspaceFolder}"
+      }
     }
   }
 }
@@ -115,6 +119,7 @@ Create or edit `~/.codeium/windsurf/mcp_config.json`:
 Any MCP-compatible client can connect using:
 - **Transport**: HTTP (Streamable HTTP)
 - **URL**: `http://localhost:3003/mcp/`
+- **Header**: `X-Cassis-Root: ${workspaceFolder}`
 - **Protocol version**: `2025-06-18`
 - **Authentication**: none; Cassis trusts processes on the local machine
 

@@ -108,6 +108,22 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
     /// <summary>Completes when the transport listener stops.</summary>
     public Task Completion => _transport.Completion;
 
+    /// <summary>
+    /// Sends tools/call and prompt methods to another Rhino. The function returns a JSON-RPC response body.
+    /// </summary>
+    public void UseRouter(Func<JsonRpcRequest, string?, bool, Task<string?>> router)
+    {
+        _transport.RequestRouter = router;
+    }
+
+    /// <summary>
+    /// Runs /cassis/call against one open Grasshopper file.
+    /// </summary>
+    public void UseDocumentFocus(Func<string, Func<Task<JsonRpcMessage>>, Task<JsonRpcMessage>> focus)
+    {
+        _transport.FocusCall = focus;
+    }
+
     /// <summary>Starts listening for requests.</summary>
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {

@@ -8,10 +8,13 @@ Your AI client must also be connected to Cassis.
 1. Restart Rhino after installing or updating Cassis.
 2. Open Grasshopper. The MCP server **auto-starts** on load (all tools enabled) at
    `http://localhost:3003/mcp/`.
+   One URL serves every open Rhino, on Mac and Windows. Tool calls need the header
+   `X-Cassis-Root` set to that window's project folder. A missing header is refused.
 3. Configure your AI client with:
 
    - Transport: Streamable HTTP
    - URL: `http://localhost:3003/mcp/`
+   - Header: `X-Cassis-Root: ${workspaceFolder}`
    - Authentication: none
 
 The server is available while Rhino and Grasshopper are running. You do **not**
@@ -98,7 +101,10 @@ Create `.cursor/mcp.json` in the project or `~/.cursor/mcp.json` for all project
   "mcpServers": {
     "cassis": {
       "type": "url",
-      "url": "http://localhost:3003/mcp/"
+      "url": "http://localhost:3003/mcp/",
+      "headers": {
+        "X-Cassis-Root": "${workspaceFolder}"
+      }
     }
   }
 }
@@ -143,6 +149,7 @@ Use these values:
 Name: cassis
 Transport: Streamable HTTP
 URL: http://localhost:3003/mcp/
+Header: X-Cassis-Root: ${workspaceFolder}
 Authentication: none
 ```
 
@@ -171,7 +178,7 @@ If the client cannot connect, confirm that:
 
 - Grasshopper is open (MCP auto-starts unless Auto-start was disabled);
 - the URL includes the trailing slash: `http://localhost:3003/mcp/`;
-- another process is not already using port `3003`; and
+- the client sends `X-Cassis-Root` as the project folder; and
 - the client has reloaded its MCP configuration.
 
 Cassis accepts connections only from the local machine and has no application-level
