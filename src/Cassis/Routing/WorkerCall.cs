@@ -24,12 +24,29 @@ internal static class WorkerCall
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         using var response = await Http.PostAsync($"http://127.0.0.1:{port}/cassis/call", content, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode || string.IsNullOrWhiteSpace(body))
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return ErrorJson(request, $"The Rhino on port {port} did not accept the call.");
+        }
+
+        if (!response.IsSuccessStatusCode && !IsJsonRpcError(body))
         {
             return ErrorJson(request, $"The Rhino on port {port} did not accept the call.");
         }
 
         return body;
+    }
+
+    private static bool IsJsonRpcError(string body)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<JsonRpcMessage>(body) is JsonRpcError;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public static string ErrorJson(JsonRpcRequest request, string detail)

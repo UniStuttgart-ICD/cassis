@@ -15,6 +15,7 @@ internal enum InstanceMatchKind
     MissingHeader,
     UnexpandedHeader,
     NoFile,
+    WorkerDown,
     TwoRhinos,
     TwoFiles,
 }
@@ -94,15 +95,23 @@ internal static class InstanceMatcher
                 $"No open Grasshopper file is inside {root}. Save the file into that folder.");
         }
 
-        if (byPid.Count > 1)
+        var live = byPid.Where(group => group.First().Snapshot.Port > 0).ToList();
+        if (live.Count == 0)
         {
-            var pids = string.Join(", ", byPid.Select(group => group.Key.ToString(CultureInfo.InvariantCulture)));
+            return Fail(
+                InstanceMatchKind.WorkerDown,
+                "Cassis worker stopped. Use Restart Server in Grasshopper.");
+        }
+
+        if (live.Count > 1)
+        {
+            var pids = string.Join(", ", live.Select(group => group.Key.ToString(CultureInfo.InvariantCulture)));
             return Fail(
                 InstanceMatchKind.TwoRhinos,
                 $"More than one Rhino has a file inside {root}. Pids: {pids}.");
         }
 
-        var group = byPid[0];
+        var group = live[0];
         var files = group.Select(hit => hit.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var instance = group.First().Snapshot;
         if (files.Count == 1)
@@ -216,18 +225,15 @@ internal static class InstanceFiles
                 continue;
             }
 
-            if (snapshot == null || snapshot.Pid <= 0 || snapshot.Port <= 0)
+            if (snapshot == null || snapshot.Pid <= 0)
             {
+                TryDelete(path);
                 continue;
             }
 
-            if (utcNow - AsUtc(snapshot.Utc) > staleAfter)
+            if (utcNow - AsUtc(snapshot.Utc) > staleAfter || !isAlive(snapshot.Pid))
             {
-                continue;
-            }
-
-            if (!isAlive(snapshot.Pid))
-            {
+                TryDelete(path);
                 continue;
             }
 
@@ -235,6 +241,22 @@ internal static class InstanceFiles
         }
 
         return live;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // The next read removes the file when it is no longer in use.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The next read removes the file when it is no longer in use.
+        }
     }
 
     private static DateTime AsUtc(DateTime value)

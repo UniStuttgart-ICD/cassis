@@ -481,11 +481,12 @@ public static class CassisRuntime
 
         if (clearRecord)
         {
-            InstanceFiles.Delete(CassisSettings.SettingsDirectory, Process.GetCurrentProcess().Id);
+            PublishInstance();
         }
 
         await DisposeServerAsync(server, cts).ConfigureAwait(false);
         NotifyChanged();
+        _ = RestartWorkerAsync();
     }
 
     private static void OnMessage(JsonRpcMessage msg)
@@ -637,39 +638,112 @@ public static class CassisRuntime
 
     private static async Task StartHostsAsync(HashSet<string> tools)
     {
-        var port = AllocateLoopbackPort();
-        var workerPrefix = $"http://127.0.0.1:{port}/mcp/";
-        var worker = new CassisHost(workerPrefix, tools);
-        worker.UseDocumentFocus(CanvasFocus.RunAsync);
-        var workerCts = new CancellationTokenSource();
-        try
-        {
-            await worker.StartAsync(workerCts.Token).ConfigureAwait(false);
-        }
-        catch
-        {
-            await DisposeServerAsync(worker, workerCts).ConfigureAwait(false);
-            throw;
-        }
-
-        worker.MessageReceived += OnMessage;
-        lock (Gate)
-        {
-            _worker = worker;
-            _workerCts = workerCts;
-            _workerPort = port;
-            _serverStartTime = DateTime.UtcNow;
-            _status = "Running";
-            _clientInitialized = false;
-        }
-
-        RhinoApp.WriteLine($"[MCP] Worker: {workerPrefix}");
-        PublishInstance();
+        await StartWorkerAsync(tools, resetClient: true).ConfigureAwait(false);
         WatchDocuments();
         StartHeartbeat();
         await TryStartDoorAsync(tools).ConfigureAwait(false);
         NotifyChanged();
-        _ = ObserveServerCompletionAsync(worker, workerCts, workerPrefix);
+    }
+
+    private static int _workerStarting;
+
+    private static async Task StartWorkerAsync(HashSet<string> tools, bool resetClient)
+    {
+        if (Interlocked.Exchange(ref _workerStarting, 1) == 1)
+        {
+            throw new InvalidOperationException("Worker start already in progress.");
+        }
+
+        try
+        {
+            var port = AllocateLoopbackPort();
+            var workerPrefix = $"http://127.0.0.1:{port}/mcp/";
+            var worker = new CassisHost(workerPrefix, tools);
+            worker.UseDocumentFocus(CanvasFocus.RunAsync);
+            var workerCts = new CancellationTokenSource();
+            try
+            {
+                await worker.StartAsync(workerCts.Token).ConfigureAwait(false);
+            }
+            catch
+            {
+                await DisposeServerAsync(worker, workerCts).ConfigureAwait(false);
+                throw;
+            }
+
+            worker.MessageReceived += OnMessage;
+            lock (Gate)
+            {
+                _worker = worker;
+                _workerCts = workerCts;
+                _workerPort = port;
+                _serverStartTime = DateTime.UtcNow;
+                _status = "Running";
+                if (resetClient)
+                {
+                    _clientInitialized = false;
+                }
+            }
+
+            RhinoApp.WriteLine($"[MCP] Worker: {workerPrefix}");
+            PublishInstance();
+            _ = ObserveServerCompletionAsync(worker, workerCts, workerPrefix);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _workerStarting, 0);
+        }
+    }
+
+    private static int _workerRestart;
+
+    private static async Task RestartWorkerAsync()
+    {
+        if (Interlocked.Exchange(ref _workerRestart, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            HashSet<string> tools;
+            lock (Gate)
+            {
+                if (_worker != null ||
+                    string.Equals(_status, "Starting", StringComparison.Ordinal) ||
+                    string.Equals(_status, "Restarting", StringComparison.Ordinal) ||
+                    string.Equals(_status, "Stopping", StringComparison.Ordinal) ||
+                    string.Equals(_status, "Stopped", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                tools = new HashSet<string>(_enabledTools, StringComparer.OrdinalIgnoreCase);
+            }
+
+            try
+            {
+                await StartWorkerAsync(tools, resetClient: false).ConfigureAwait(false);
+                NotifyChanged();
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine($"[Cassis] Could not restart the worker: {ex.Message}");
+                lock (Gate)
+                {
+                    if (_worker == null)
+                    {
+                        _status = "Error";
+                    }
+                }
+
+                NotifyChanged();
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _workerRestart, 0);
+        }
     }
 
     private static int _doorAttempt;
@@ -729,6 +803,10 @@ public static class CassisRuntime
             RhinoApp.WriteLine($"[MCP] Prefix: {McpEndpoint}");
             _ = ObserveServerCompletionAsync(door, cts, McpEndpoint);
         }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"[Cassis] Could not bind port 3003: {ex.Message}");
+        }
         finally
         {
             Interlocked.Exchange(ref _doorAttempt, 0);
@@ -769,8 +847,18 @@ public static class CassisRuntime
 
             if (port == 0)
             {
-                InstanceFiles.Delete(CassisSettings.SettingsDirectory, Process.GetCurrentProcess().Id);
-                return;
+                var stopping = false;
+                lock (Gate)
+                {
+                    stopping = string.Equals(_status, "Stopping", StringComparison.Ordinal)
+                        || string.Equals(_status, "Stopped", StringComparison.Ordinal);
+                }
+
+                if (stopping)
+                {
+                    InstanceFiles.Delete(CassisSettings.SettingsDirectory, Process.GetCurrentProcess().Id);
+                    return;
+                }
             }
 
             InstanceSnapshot snapshot;
@@ -857,15 +945,22 @@ public static class CassisRuntime
                     PublishInstance();
                     HashSet<string> tools;
                     var hasDoor = false;
+                    var restartWorker = false;
                     lock (Gate)
                     {
                         hasDoor = _server != null;
+                        restartWorker = _worker == null && _status.StartsWith("Error", StringComparison.OrdinalIgnoreCase);
                         tools = new HashSet<string>(_enabledTools, StringComparer.OrdinalIgnoreCase);
+                    }
+
+                    if (restartWorker)
+                    {
+                        _ = RestartWorkerAsync();
                     }
 
                     if (!hasDoor)
                     {
-                        TryStartDoorAsync(tools).GetAwaiter().GetResult();
+                        _ = TryStartDoorAsync(tools);
                     }
                 }
                 catch (Exception ex)
