@@ -14,7 +14,7 @@ Your AI client must also be connected to Cassis.
 
    - Transport: Streamable HTTP
    - URL: `http://localhost:3003/mcp/`
-   - Header: `X-Cassis-Root: ${workspaceFolder}`
+   - Header: `X-Cassis-Root` set to the project folder
    - Authentication: none
 
 The server is available while Rhino and Grasshopper are running. You do **not**
@@ -54,39 +54,40 @@ Run:
 codex mcp add cassis --url http://localhost:3003/mcp/
 ```
 
-Or add this to `~/.codex/config.toml`:
+Or add this to `~/.codex/config.toml`. Replace the path with the project folder:
 
 ```toml
 [mcp_servers.cassis]
 url = "http://localhost:3003/mcp/"
+http_headers = { "X-Cassis-Root" = "/absolute/path/to/project" }
 ```
 
 You can also open Codex settings, select **MCP servers**, and add a Streamable HTTP
-server with the URL above.
+server with the URL above. Add the same `X-Cassis-Root` header there.
 
 ### Claude Code
 
-Run:
+Run this from the project. Replace the path with the project folder:
 
 ```bash
-claude mcp add --transport http --scope user cassis http://localhost:3003/mcp/
+claude mcp add --transport http --scope local cassis http://localhost:3003/mcp/ --header "X-Cassis-Root: /absolute/path/to/project"
 ```
-
-Use `--scope local` instead if Cassis should be available only in the current
-project.
 
 ### VS Code with GitHub Copilot
 
 [Install Cassis in VS Code](vscode:mcp/install?%7B%22name%22%3A%22cassis%22%2C%22type%22%3A%22http%22%2C%22url%22%3A%22http%3A%2F%2Flocalhost%3A3003%2Fmcp%2F%22%7D)
 
-Or create `.vscode/mcp.json`:
+The install link does not set the header. Create `.vscode/mcp.json`:
 
 ```json
 {
   "servers": {
     "cassis": {
       "type": "http",
-      "url": "http://localhost:3003/mcp/"
+      "url": "http://localhost:3003/mcp/",
+      "headers": {
+        "X-Cassis-Root": "${workspaceFolder}"
+      }
     }
   }
 }
@@ -112,7 +113,7 @@ Create `.cursor/mcp.json` in the project or `~/.cursor/mcp.json` for all project
 
 ### OpenCode
 
-Add this to `opencode.json`:
+Add this to `opencode.json` in the project. Replace the path with that project folder:
 
 ```json
 {
@@ -121,7 +122,10 @@ Add this to `opencode.json`:
     "cassis": {
       "type": "remote",
       "url": "http://localhost:3003/mcp/",
-      "enabled": true
+      "enabled": true,
+      "headers": {
+        "X-Cassis-Root": "/absolute/path/to/project"
+      }
     }
   }
 }
@@ -129,13 +133,16 @@ Add this to `opencode.json`:
 
 ### Windsurf
 
-Add this to `~/.codeium/windsurf/mcp_config.json`:
+Add this to `~/.codeium/windsurf/mcp_config.json`. This file is global. Replace the path with the project folder:
 
 ```json
 {
   "mcpServers": {
     "cassis": {
-      "serverUrl": "http://localhost:3003/mcp/"
+      "serverUrl": "http://localhost:3003/mcp/",
+      "headers": {
+        "X-Cassis-Root": "/absolute/path/to/project"
+      }
     }
   }
 }
@@ -149,7 +156,7 @@ Use these values:
 Name: cassis
 Transport: Streamable HTTP
 URL: http://localhost:3003/mcp/
-Header: X-Cassis-Root: ${workspaceFolder}
+Header: X-Cassis-Root set to the project folder. Cursor and VS Code expand ${workspaceFolder}. Other clients need the absolute folder.
 Authentication: none
 ```
 

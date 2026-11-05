@@ -36,6 +36,13 @@ public static class CassisRuntime
     public const string McpEndpoint = "http://localhost:3003/mcp/";
     public const string AgentSetupUrl = "https://github.com/UniStuttgart-ICD/cassis/blob/main/docs/agent-setup.md";
 
+    internal enum StartDecision
+    {
+        Ignore,
+        Start,
+        Recover,
+    }
+
     private static string _prefix = McpEndpoint;
     private static HashSet<string> _enabledTools = new(ToolCategories.AllTools(), StringComparer.OrdinalIgnoreCase);
     private static DateTime? _serverStartTime;
@@ -138,14 +145,17 @@ public static class CassisRuntime
     /// </summary>
     public static void RequestStart(string? prefix = null, IEnumerable<string>? enabledTools = null, bool allTools = false)
     {
+        var recover = false;
         lock (Gate)
         {
-            if (_server != null ||
-                string.Equals(_status, "Starting", StringComparison.Ordinal) ||
-                string.Equals(_status, "Restarting", StringComparison.Ordinal))
+            var hostsUp = _server != null || _worker != null;
+            var decision = DecideStart(hostsUp, _status);
+            if (decision == StartDecision.Ignore)
             {
                 return;
             }
+
+            recover = decision == StartDecision.Recover;
 
             if (!string.IsNullOrWhiteSpace(prefix))
             {
@@ -165,7 +175,40 @@ public static class CassisRuntime
         }
 
         NotifyChanged();
+        if (recover)
+        {
+            _ = RecoverAsync();
+            return;
+        }
+
         _ = StartCoreAsync();
+    }
+
+    /// <summary>
+    /// A failed worker keeps the port 3003 listener. Restart must stop that listener before it binds again.
+    /// A live worker, including one that did not win port 3003, is already started.
+    /// </summary>
+    internal static StartDecision DecideStart(bool hostsUp, string status)
+    {
+        if (string.Equals(status, "Starting", StringComparison.Ordinal) ||
+            string.Equals(status, "Restarting", StringComparison.Ordinal) ||
+            string.Equals(status, "Stopping", StringComparison.Ordinal))
+        {
+            return StartDecision.Ignore;
+        }
+
+        if (status.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            return hostsUp ? StartDecision.Recover : StartDecision.Start;
+        }
+
+        return hostsUp ? StartDecision.Ignore : StartDecision.Start;
+    }
+
+    private static async Task RecoverAsync()
+    {
+        await StopHostsAsync().ConfigureAwait(false);
+        await StartCoreAsync().ConfigureAwait(false);
     }
 
     /// <summary>Stops MCP if running. No-op while already stopping/stopped.</summary>
@@ -417,6 +460,7 @@ public static class CassisRuntime
 
         var report = McpStartupDiagnostics.WriteReport(failure, "Listener lifetime", prefix);
         RhinoApp.WriteLine($"[MCP ERROR] Listener stopped unexpectedly: {failure}");
+        var clearRecord = false;
         lock (Gate)
         {
             if (!ReferenceEquals(_worker, server))
@@ -428,10 +472,16 @@ public static class CassisRuntime
             _workerCts = null;
             _workerPort = 0;
             _status = report.Written ? "Error (report written)" : "Error";
+            clearRecord = true;
             Messages.Enqueue(
                 report.Written
                     ? $"MCP listener report: {report.Detail}"
                     : $"MCP listener report unavailable: {report.Detail}");
+        }
+
+        if (clearRecord)
+        {
+            InstanceFiles.Delete(CassisSettings.SettingsDirectory, Process.GetCurrentProcess().Id);
         }
 
         await DisposeServerAsync(server, cts).ConfigureAwait(false);
@@ -719,6 +769,7 @@ public static class CassisRuntime
 
             if (port == 0)
             {
+                InstanceFiles.Delete(CassisSettings.SettingsDirectory, Process.GetCurrentProcess().Id);
                 return;
             }
 
@@ -732,6 +783,14 @@ public static class CassisRuntime
                 snapshot = Utilities.UiThreadHelper.InvokeAsync(
                     () => CanvasFocus.Capture(Process.GetCurrentProcess().Id, port)).GetAwaiter().GetResult();
             }
+            lock (Gate)
+            {
+                if (_workerPort != port)
+                {
+                    return;
+                }
+            }
+
             InstanceFiles.Write(CassisSettings.SettingsDirectory, snapshot);
         }
         catch (Exception ex)

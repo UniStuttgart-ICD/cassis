@@ -27,7 +27,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     private const int MaxConcurrentRequests = 32;
     private const int MaxRequestBodyBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan RequestBodyTimeout = TimeSpan.FromSeconds(30);
-    private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name";
+    private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, X-Cassis-Root";
     private static readonly object ServerCapabilities = new { tools = new { }, prompts = new { } };
     private const string MetaVersionKey = "io.modelcontextprotocol/protocolVersion";
     private const string MetaCapabilitiesKey = "io.modelcontextprotocol/clientCapabilities";

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cassis;
 using Cassis.Routing;
 using ModelContextProtocol.Protocol;
 using NUnit.Framework;
@@ -192,5 +193,35 @@ public class InstanceMatchTests
             Paths = new List<string> { active, other },
             Utc = DateTime.UtcNow,
         };
+    }
+}
+
+[TestFixture]
+public class StartDecisionTests
+{
+    [Test]
+    public void ErrorWithListenerStillUp_Recovers()
+    {
+        Assert.That(CassisRuntime.DecideStart(true, "Error"), Is.EqualTo(CassisRuntime.StartDecision.Recover));
+        Assert.That(CassisRuntime.DecideStart(true, "Error (report written)"), Is.EqualTo(CassisRuntime.StartDecision.Recover));
+    }
+
+    [Test]
+    public void ErrorWithNoListener_Starts()
+    {
+        Assert.That(CassisRuntime.DecideStart(false, "Error"), Is.EqualTo(CassisRuntime.StartDecision.Start));
+    }
+
+    [Test]
+    public void LiveWorker_DoesNotStartAgain()
+    {
+        Assert.That(CassisRuntime.DecideStart(true, "Running"), Is.EqualTo(CassisRuntime.StartDecision.Ignore));
+        Assert.That(CassisRuntime.DecideStart(true, "Stopped"), Is.EqualTo(CassisRuntime.StartDecision.Ignore));
+    }
+
+    [Test]
+    public void StoppedWithNoListener_Starts()
+    {
+        Assert.That(CassisRuntime.DecideStart(false, "Stopped"), Is.EqualTo(CassisRuntime.StartDecision.Start));
     }
 }
