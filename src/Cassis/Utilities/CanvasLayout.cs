@@ -136,7 +136,20 @@ public static class CanvasLayout
         var movable = unitMembers.Keys.Where(u => !frozenUnits.Contains(u)).ToHashSet();
         if (movable.Count == 0)
         {
-            return EmptyPlan(warnings);
+            // Still return Leiden graph so agents can name modules on a fully frozen / filtered selection.
+            var frozenGraph = CanvasGraphAnalysis.Analyze(nodes, edges, membership, MaxCandidateSize);
+            var frozenCandidates = proposeGroups
+                ? ModulesToCandidates(frozenGraph.Modules, warnings)
+                : Array.Empty<GroupCandidate>();
+            return new LayoutPlan(
+                Array.Empty<LayoutMove>(),
+                Array.Empty<SupernodeInfo>(),
+                frozenCandidates,
+                Array.Empty<ScribblePlan>(),
+                Array.Empty<WireHideHint>(),
+                warnings,
+                StageByNode: null,
+                Graph: frozenGraph);
         }
 
         var needsTitle = BuildNeedsTitle(movable, unitOf, unitMembers, namedGroups);
@@ -1090,7 +1103,7 @@ public static class CanvasLayout
 
             var memberSet = members.ToHashSet();
             var memberSizes = members.ToDictionary(m => m, m => (byId[m].Width, byId[m].Height));
-            var ranks = LongestPathRanks(memberSet, edges);
+            var ranks = RankMembersWithCycleBreak(memberSet, edges, warnings);
             var ordered = members
                 .OrderBy(m => ranks.TryGetValue(m, out var r) ? r : 0)
                 .ThenBy(m => byId[m].PivotY)
@@ -1143,6 +1156,40 @@ public static class CanvasLayout
         }
 
         return local;
+    }
+
+    /// <summary>
+    /// Longest-path ranks inside a group after DFS cycle break (same as island ranking).
+    /// </summary>
+    private static Dictionary<Guid, int> RankMembersWithCycleBreak(
+        HashSet<Guid> members,
+        IReadOnlyList<LayoutEdge> edges,
+        List<string> warnings)
+    {
+        var adjOut = members.ToDictionary(m => m, _ => new List<Guid>());
+        var adjIn = members.ToDictionary(m => m, _ => new List<Guid>());
+        foreach (var e in edges)
+        {
+            if (!members.Contains(e.From) || !members.Contains(e.To) || e.From == e.To)
+            {
+                continue;
+            }
+
+            adjOut[e.From].Add(e.To);
+            adjIn[e.To].Add(e.From);
+        }
+
+        BreakCyclesDfs(members, adjOut, adjIn, warnings);
+        var dag = new List<(Guid From, Guid To)>();
+        foreach (var kv in adjOut)
+        {
+            foreach (var to in kv.Value)
+            {
+                dag.Add((kv.Key, to));
+            }
+        }
+
+        return LongestPathRanks(members, dag);
     }
 
     private static void AnchorCentroid(

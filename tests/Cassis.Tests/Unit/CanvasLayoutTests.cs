@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Cassis.Tools;
 using Cassis.Utilities;
 using NUnit.Framework;
 
@@ -491,6 +492,97 @@ public class CanvasLayoutTests
             proposeGroups: true);
 
         Assert.That(plan.GroupCandidates.Count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void AllFrozen_StillReturnsGraphModules()
+    {
+        var nodes = new[]
+        {
+            Node(1, 0, 0, frozen: true),
+            Node(2, 100, 0, frozen: true),
+            Node(3, 200, 0, frozen: true),
+            Node(4, 50, 80, frozen: true),
+        };
+        var edges = new[]
+        {
+            new LayoutEdge(G(1), G(2)),
+            new LayoutEdge(G(2), G(3)),
+            new LayoutEdge(G(1), G(4)),
+            new LayoutEdge(G(4), G(3)),
+        };
+
+        var plan = CanvasLayout.Compute(
+            nodes,
+            edges,
+            Array.Empty<LayoutMembership>(),
+            proposeGroups: true);
+
+        Assert.That(plan.Moves.Count, Is.EqualTo(0));
+        Assert.That(plan.Graph, Is.Not.Null);
+        Assert.That(plan.Graph!.NodeCount, Is.EqualTo(4));
+    }
+
+    [Test]
+    public void SpatialBridges_UseGridNotAllPairs()
+    {
+        // 9 nodes in a 3×3 grid far enough that only neighbors within SpatialRadius link.
+        var nodes = new Dictionary<Guid, LayoutNode>();
+        var ids = new HashSet<Guid>();
+        for (var i = 0; i < 9; i++)
+        {
+            var id = G(i + 1);
+            ids.Add(id);
+            var x = (i % 3) * CanvasGraphAnalysis.SpatialRadius * 0.9f;
+            var y = (i / 3) * CanvasGraphAnalysis.SpatialRadius * 0.9f;
+            nodes[id] = Node(i + 1, x, y);
+        }
+
+        var added = new List<(Guid A, Guid B)>();
+        CanvasGraphAnalysis.AddSpatialBridges(
+            ids,
+            nodes,
+            (a, b, _) => added.Add((a, b)));
+
+        // All-pairs among 9 = 36; grid neighbors must be fewer.
+        Assert.That(added.Count, Is.LessThan(36));
+        Assert.That(added.Count, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public void ShouldHideParamWires_RequiresEverySourceLong()
+    {
+        Assert.That(OrganizeTools.ShouldHideParamWires(0, 0), Is.False);
+        Assert.That(OrganizeTools.ShouldHideParamWires(1, 1), Is.True);
+        Assert.That(OrganizeTools.ShouldHideParamWires(2, 1), Is.False);
+        Assert.That(OrganizeTools.ShouldHideParamWires(2, 2), Is.True);
+    }
+
+    [Test]
+    public void Supernode_CycleInsideGroup_StillPacks()
+    {
+        var groupId = G(99);
+        var nodes = new[]
+        {
+            Node(1, 0, 0),
+            Node(2, 100, 0),
+            Node(3, 40, 30),
+            Node(4, 60, 50),
+        };
+        // Cycle 3→4→3 inside the group.
+        var edges = new[]
+        {
+            new LayoutEdge(G(1), G(3)),
+            new LayoutEdge(G(3), G(4)),
+            new LayoutEdge(G(4), G(3)),
+            new LayoutEdge(G(4), G(2)),
+        };
+        var groups = new[] { new LayoutMembership(groupId, new[] { G(3), G(4) }) };
+
+        var plan = CanvasLayout.Compute(nodes, edges, groups);
+        Assert.That(plan.Moves.Any(m => m.Id == G(3)), Is.True);
+        Assert.That(plan.Moves.Any(m => m.Id == G(4)), Is.True);
+        Assert.That(plan.Warnings.Any(w => w.IndexOf("cycle", StringComparison.OrdinalIgnoreCase) >= 0), Is.True);
     }
 
     [Test]

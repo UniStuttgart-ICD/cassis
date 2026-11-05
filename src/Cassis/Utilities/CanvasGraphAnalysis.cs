@@ -132,26 +132,76 @@ public static class CanvasGraphAnalysis
             Add(e.From, e.To, w);
         }
 
-        // Spatial bridges (SOTA practice for canvas graphs: proximity ≈ intent).
-        var list = nodes.Where(byId.ContainsKey).ToList();
-        for (var i = 0; i < list.Count; i++)
+        // Spatial bridges via grid (O(n · k), not O(n²)) — proximity ≈ intent on GH canvases.
+        AddSpatialBridges(nodes, byId, Add);
+
+        return weights.Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
+    }
+
+    /// <summary>
+    /// Link nodes in the same / neighboring spatial cells within <see cref="SpatialRadius"/>.
+    /// </summary>
+    internal static void AddSpatialBridges(
+        HashSet<Guid> nodes,
+        Dictionary<Guid, LayoutNode> byId,
+        Action<Guid, Guid, float> add)
+    {
+        var cell = Math.Max(1f, SpatialRadius);
+        var buckets = new Dictionary<(int Cx, int Cy), List<Guid>>();
+        foreach (var id in nodes)
         {
-            var a = byId[list[i]];
-            for (var j = i + 1; j < list.Count; j++)
+            if (!byId.TryGetValue(id, out var n))
             {
-                var b = byId[list[j]];
-                var dx = a.PivotX - b.PivotX;
-                var dy = a.PivotY - b.PivotY;
-                var dist = Math.Sqrt(dx * dx + dy * dy);
-                if (dist <= SpatialRadius && dist > 1e-3)
+                continue;
+            }
+
+            var key = ((int)Math.Floor(n.PivotX / cell), (int)Math.Floor(n.PivotY / cell));
+            if (!buckets.TryGetValue(key, out var list))
+            {
+                list = new List<Guid>();
+                buckets[key] = list;
+            }
+
+            list.Add(id);
+        }
+
+        foreach (var kv in buckets)
+        {
+            var (cx, cy) = kv.Key;
+            var home = kv.Value;
+            for (var ox = -1; ox <= 1; ox++)
+            {
+                for (var oy = -1; oy <= 1; oy++)
                 {
-                    var falloff = (float)(1.0 - dist / SpatialRadius);
-                    Add(list[i], list[j], SpatialEdgeWeight * falloff);
+                    if (!buckets.TryGetValue((cx + ox, cy + oy), out var other))
+                    {
+                        continue;
+                    }
+
+                    foreach (var aId in home)
+                    {
+                        var a = byId[aId];
+                        foreach (var bId in other)
+                        {
+                            if (aId.CompareTo(bId) >= 0)
+                            {
+                                continue;
+                            }
+
+                            var b = byId[bId];
+                            var dx = a.PivotX - b.PivotX;
+                            var dy = a.PivotY - b.PivotY;
+                            var dist = Math.Sqrt(dx * dx + dy * dy);
+                            if (dist <= SpatialRadius && dist > 1e-3)
+                            {
+                                var falloff = (float)(1.0 - dist / SpatialRadius);
+                                add(aId, bId, SpatialEdgeWeight * falloff);
+                            }
+                        }
+                    }
                 }
             }
         }
-
-        return weights.Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
     }
 }
 

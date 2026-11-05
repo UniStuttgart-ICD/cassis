@@ -45,9 +45,9 @@ public static class OrganizeTools
         string? namedGroupsJson = null,
         [Description("compact (default) packs computational blocks then aligns them; reflow also places islands L-to-R.")]
         string layoutMode = "compact",
-        [Description("Horizontal gap between layers (default 280).")]
+        [Description("Horizontal gap between layers (default 120).")]
         float columnGap = CanvasLayout.DefaultColumnGap,
-        [Description("Vertical gap between nodes in a layer (default 40).")]
+        [Description("Vertical gap between nodes in a layer (default 24).")]
         float rowGap = CanvasLayout.DefaultRowGap,
         [Description("Space above a named block for the Scribble title (default 48).")]
         float titleBand = CanvasLayout.DefaultTitleBand,
@@ -159,6 +159,7 @@ public static class OrganizeTools
         {
             undoOk = TryBeginUndo(doc, "Cassis Organize Canvas");
             ApplyMoves(doc, plan.Moves);
+            ResetWireDisplays(doc);
             wiresHidden = ApplyWireHides(doc, plan.WireHides);
             var groupResults = new List<object>();
             foreach (var ng in namedSpecs)
@@ -535,7 +536,30 @@ public static class OrganizeTools
     }
 
     /// <summary>
+    /// Restore default wire display so a prior organize does not leave sticky hides.
+    /// </summary>
+    private static void ResetWireDisplays(GH_Document doc)
+    {
+        foreach (var obj in doc.Objects)
+        {
+            if (obj is GH_Group)
+            {
+                continue;
+            }
+
+            foreach (var param in EnumerateParams(obj))
+            {
+                if (param.WireDisplay == GH_ParamWireDisplay.hidden)
+                {
+                    param.WireDisplay = GH_ParamWireDisplay.@default;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Hide wires into destination params when the laid-out span is too long (GH_ParamWireDisplay.hidden).
+    /// GH can only hide per-param, not per-wire — hide only when every source is a long hop.
     /// </summary>
     private static int ApplyWireHides(GH_Document doc, IReadOnlyList<WireHideHint> hints)
     {
@@ -561,7 +585,8 @@ public static class OrganizeTools
                 }
 
                 var toOwner = obj.InstanceGuid;
-                var hide = false;
+                var sourceCount = 0;
+                var matchingHides = 0;
                 foreach (var src in param.Sources)
                 {
                     if (src == null)
@@ -569,15 +594,15 @@ public static class OrganizeTools
                         continue;
                     }
 
+                    sourceCount++;
                     var fromOwner = ResolveOwnerGuid(src);
                     if (hidePairs.Contains((fromOwner, toOwner)))
                     {
-                        hide = true;
-                        break;
+                        matchingHides++;
                     }
                 }
 
-                if (!hide)
+                if (!ShouldHideParamWires(sourceCount, matchingHides))
                 {
                     continue;
                 }
@@ -589,6 +614,12 @@ public static class OrganizeTools
 
         return count;
     }
+
+    /// <summary>
+    /// GH WireDisplay is per-param. Only hide when every live source is a long hop.
+    /// </summary>
+    internal static bool ShouldHideParamWires(int sourceCount, int matchingHideSources) =>
+        sourceCount > 0 && matchingHideSources >= sourceCount;
 
     private static object ApplyNamedGroup(
         GH_Document doc,
