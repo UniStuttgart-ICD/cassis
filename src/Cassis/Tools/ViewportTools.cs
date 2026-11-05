@@ -2,12 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Cassis.Extensions;
 using Cassis.Models;
-using Cassis.Services;
 using Cassis.Utilities;
 using Grasshopper;
 using Grasshopper.Kernel;
@@ -26,9 +24,8 @@ namespace Cassis.Tools;
 public static class ViewportTools
 {
     [McpServerTool(Name = "Capture_Viewport_Simple")]
-    [Description("Compatibility alias: captures the active Rhino viewport to disk with default settings")]
-    public static Task<CallToolResult> CaptureViewportSimple(
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
+    [Description("Compatibility alias: returns the active Rhino viewport as an image with default settings")]
+    public static Task<CallToolResult> CaptureViewportSimple()
     {
         // Delegate to the full-featured capture with sensible defaults
         return CaptureViewport(
@@ -38,8 +35,7 @@ public static class ViewportTools
             includeGrid: false,
             includeAxes: false,
             transparentBackground: false,
-            quality: 90,
-            retentionSeconds: retentionSeconds);
+            quality: 90);
     }
 
     [McpServerTool(Name = "List_Viewports")]
@@ -85,7 +81,7 @@ public static class ViewportTools
     }
 
     [McpServerTool(Name = "Capture_Viewport")]
-    [Description("Captures a Rhino viewport and returns it as a PNG image plus JSON metadata (the PNG is also saved to disk for retentionSeconds)")]
+    [Description("Captures a Rhino viewport and returns it as a PNG image plus JSON metadata. Saves a PNG only when filePath is given")]
     public static async Task<CallToolResult> CaptureViewport(
         [Description("Viewport name (optional; uses active viewport when omitted)")] string? viewportName = null,
         [Description("Output width in pixels")] int width = 1024,
@@ -94,9 +90,9 @@ public static class ViewportTools
         [Description("Include world axes in the capture")] bool includeAxes = false,
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60,
         [Description("Optional GH object GUIDs: temporarily zoom to their preview for this capture only (camera restored afterwards, selection unchanged)")] string[]? componentIds = null,
-        [Description("Temporarily zoom extents for this capture only (camera restored afterwards)")] bool zoomExtents = false)
+        [Description("Temporarily zoom extents for this capture only (camera restored afterwards)")] bool zoomExtents = false,
+        [Description("Optional path to also save a PNG; the file is kept")] string? filePath = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -146,12 +142,10 @@ public static class ViewportTools
                     }
 
                     var png = ImageEncoding.EncodePng(bitmap);
-                    var capturePath = WriteCaptureToDisk(png, view);
-                    var metadata = BuildMetadata(view, bitmap, capturePath);
+                    var metadata = BuildMetadata(view, bitmap, png, filePath);
                     metadata.Framing = frameComponents ? "components" : zoomExtents ? "extents" : null;
                     metadata.NotFound = focus?.NotFound.Count > 0 ? focus.NotFound : null;
                     metadata.NoPreview = focus?.NoPreview.Count > 0 ? focus.NoPreview : null;
-                    ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
                     return McpExtensions.CreateImageResult(png, metadata);
                 }
                 finally
@@ -252,7 +246,7 @@ public static class ViewportTools
         [Description("Include world axes in the capture")] bool includeAxes = false,
         [Description("Use transparent background")] bool transparentBackground = false,
         [Description("Image quality for lossy encoders (1-100)")] int quality = 90,
-        [Description("Retention window in seconds before the on-disk capture is cleaned up")] int retentionSeconds = 60)
+        [Description("Optional path to also save a PNG; the file is kept")] string? filePath = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -368,9 +362,7 @@ public static class ViewportTools
                                        "Viewport capture returned no bitmap after orbiting. Try lowering resolution.");
 
                 var png = ImageEncoding.EncodePng(bitmap);
-                var capturePath = WriteCaptureToDisk(png, view);
-                var metadata = BuildMetadata(view, bitmap, capturePath);
-                ViewportCaptureCleanupService.RegisterForCleanup(capturePath, retentionSeconds);
+                var metadata = BuildMetadata(view, bitmap, png, filePath);
 
                 return McpExtensions.CreateImageResult(png, new Dictionary<string, object?>
                 {
@@ -516,62 +508,16 @@ public static class ViewportTools
         }
     }
 
-    private static string WriteCaptureToDisk(byte[] png, RhinoView view)
+    private static ViewportCaptureMetadata BuildMetadata(RhinoView view, Bitmap bitmap, byte[] png, string? filePath)
     {
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Grasshopper",
-            "Libraries",
-            "Cassis",
-            "captures");
-
-        Directory.CreateDirectory(directory);
-
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-        var name = view.MainViewport?.Name ?? "Viewport";
-        var filePath = Path.Combine(directory, $"viewport_{Sanitize(name)}_{timestamp}.png");
-
-        try
-        {
-            File.WriteAllBytes(filePath, png);
-
-            RhinoApp.WriteLine($"[CaptureViewport] Saved capture to {filePath}");
-        }
-        catch (Exception ex)
-        {
-            RhinoApp.WriteLine($"[CaptureViewport] Failed to save capture: {ex.Message}");
-            throw;
-        }
-
-        return filePath;
-    }
-
-    private static ViewportCaptureMetadata BuildMetadata(RhinoView view, Bitmap bitmap, string path)
-    {
-        long fileSize = 0;
-        if (File.Exists(path))
-        {
-            fileSize = new FileInfo(path).Length;
-        }
-
         return new ViewportCaptureMetadata
         {
             ViewportName = view.MainViewport?.Name ?? "Viewport",
             Width = bitmap.Width,
             Height = bitmap.Height,
-            FileSize = fileSize,
+            FileSize = png.Length,
             Timestamp = DateTime.UtcNow,
-            FilePath = path
+            FilePath = ImageEncoding.SavePng(bitmap, filePath)
         };
-    }
-
-    private static string Sanitize(string name)
-    {
-        foreach (var c in Path.GetInvalidFileNameChars())
-        {
-            name = name.Replace(c, '_');
-        }
-
-        return name;
     }
 }

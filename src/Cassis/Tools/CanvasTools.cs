@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -24,18 +23,18 @@ namespace Cassis.Tools;
 public static class CanvasTools
 {
     [McpServerTool(Name = "Capture_Canvas")]
-    [Description("Compatibility alias: captures the currently visible Grasshopper canvas, saves it as a PNG and returns it as an image")]
+    [Description("Compatibility alias: returns the currently visible Grasshopper canvas as an image. Saves a PNG only when filePath is given")]
     public static Task<CallToolResult> CaptureCanvas(
-        [Description("Destination file path (defaults to Desktop)")] string? filePath = null)
+        [Description("Optional path to also save a PNG; the file is kept")] string? filePath = null)
     {
         // Delegate to existing implementation to preserve behavior
         return SaveVisibleCanvas(filePath);
     }
 
     [McpServerTool(Name = "Save_Visible_Canvas")]
-    [Description("Captures the currently visible Grasshopper canvas, saves it as a PNG and returns it as an image")]
+    [Description("Returns the currently visible Grasshopper canvas as an image. Saves a PNG only when filePath is given")]
     public static async Task<CallToolResult> SaveVisibleCanvas(
-        [Description("Destination file path (defaults to Desktop)")] string? filePath = null)
+        [Description("Optional path to also save a PNG; the file is kept")] string? filePath = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -43,14 +42,11 @@ public static class CanvasTools
             {
                 var canvas = Instances.ActiveCanvas ?? throw new InvalidOperationException("No active Grasshopper canvas.");
 
-                var targetPath = ResolveSnapshotPath(filePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-
                 using var bitmap = canvas.GetCanvasScreenBuffer(GH_CanvasMode.Export);
-                bitmap.Save(targetPath, ImageFormat.Png);
+                var savedPath = ImageEncoding.SavePng(bitmap, filePath);
                 return McpExtensions.CreateImageResult(
                     ImageEncoding.EncodePng(bitmap),
-                    new { success = true, file = targetPath, width = bitmap.Width, height = bitmap.Height });
+                    new { success = true, file = savedPath, width = bitmap.Width, height = bitmap.Height });
             });
 
             return result;
@@ -114,28 +110,6 @@ public static class CanvasTools
 
             return result;
         }, nameof(SaveHiResCanvas));
-    }
-
-    private static string ResolveSnapshotPath(string? filePath)
-    {
-        if (!string.IsNullOrWhiteSpace(filePath))
-        {
-            var directory = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            return Path.GetExtension(filePath) switch
-            {
-                ".png" => filePath,
-                null or "" => filePath + ".png",
-                _ => Path.ChangeExtension(filePath, ".png")
-            };
-        }
-
-        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        return Path.Combine(desktop, $"GrasshopperCanvas_{DateTime.Now:yyyyMMdd_HHmmss}.png");
     }
 
     private static string ResolveHiResFolder(string? outputFolder)

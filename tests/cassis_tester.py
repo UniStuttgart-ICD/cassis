@@ -1945,7 +1945,7 @@ print(f"Updated Result: {a}")
         console.print("\n🌐 [blue]Test 10.25: Viewport Tools[/blue]")
         
         # Capture_Viewport_Simple
-        success, response = make_mcp_request('tools/call', {'name': 'Capture_Viewport_Simple', 'arguments': {'retentionSeconds': 300}})
+        success, response = make_mcp_request('tools/call', {'name': 'Capture_Viewport_Simple', 'arguments': {}})
         try:
             data = json.loads(extract_response_text(response)) if success else {}
         except Exception:
@@ -1967,7 +1967,7 @@ print(f"Updated Result: {a}")
         # Capture_Viewport (full)
         success, response = make_mcp_request('tools/call', {
             'name': 'Capture_Viewport',
-            'arguments': {'viewportName': None, 'width': 640, 'height': 480, 'includeGrid': False, 'includeAxes': False, 'transparentBackground': False, 'quality': 90, 'retentionSeconds': 300}
+            'arguments': {'viewportName': None, 'width': 640, 'height': 480, 'includeGrid': False, 'includeAxes': False, 'transparentBackground': False, 'quality': 90}
         })
         try:
             data = json.loads(extract_response_text(response)) if success else {}
@@ -2016,7 +2016,6 @@ print(f"Updated Result: {a}")
                     'viewPreset': 'iso',
                     'width': 640,
                     'height': 480,
-                    'retentionSeconds': 300,
                 }
             })
             try:
