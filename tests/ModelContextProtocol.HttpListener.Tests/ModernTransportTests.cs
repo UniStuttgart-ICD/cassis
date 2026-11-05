@@ -93,6 +93,59 @@ public sealed class ModernTransportTests
     }
 
     [Test]
+    public async Task DoorForwardsToolCallToTheWorkerDocument()
+    {
+        var workerPrefix = GetPrefix();
+        var doorPrefix = GetPrefix();
+        await using var worker = new HttpListenerMcpTransport(workerPrefix, Options);
+        await using var door = new HttpListenerMcpTransport(doorPrefix, Options);
+        var documentPath = "C:/proj/model.gh";
+        string? focusedPath = null;
+        worker.FocusCall = async (path, action) =>
+        {
+            focusedPath = path;
+            return await action().ConfigureAwait(false);
+        };
+        string? seenRoot = null;
+        door.RequestRouter = async (request, root, modern) =>
+        {
+            seenRoot = root;
+            var payload = "{\"documentPath\":" + JsonSerializer.Serialize(documentPath)
+                + ",\"modern\":" + (modern ? "true" : "false")
+                + ",\"message\":" + JsonSerializer.Serialize(request) + "}";
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            var callUrl = "http://127.0.0.1:" + new Uri(workerPrefix).Port + "/cassis/call";
+            using var http = new HttpClient();
+            using var response = await http.PostAsync(callUrl, content).ConfigureAwait(false);
+            return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        };
+
+        await worker.StartAsync();
+        await door.StartAsync();
+        try
+        {
+            using var client = new HttpClient();
+            var reply = await ModernPostAsync(
+                client,
+                doorPrefix,
+                "tools/call",
+                """{"name":"echo","arguments":{"text":"hi"}}""",
+                headers: new Dictionary<string, string?> { ["X-Cassis-Root"] = "C:/proj" });
+
+            Assert.That(focusedPath, Is.EqualTo(documentPath));
+            Assert.That(seenRoot, Is.EqualTo("C:/proj"));
+            Assert.That(reply.Status, Is.EqualTo(HttpStatusCode.OK));
+            using var doc = JsonDocument.Parse(reply.Body);
+            Assert.That(doc.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString(), Is.EqualTo("hi"));
+        }
+        finally
+        {
+            await door.StopAsync();
+            await worker.StopAsync();
+        }
+    }
+
+    [Test]
     public async Task M4_ToolCallAcceptsBase64EncodedMcpName()
     {
         await WithTransportAsync(Options, async (prefix, client) =>

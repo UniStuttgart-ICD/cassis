@@ -93,7 +93,10 @@ Configure Cassis as an HTTP MCP server. For example, in VS Code:
   "servers": {
     "cassis": {
       "type": "http",
-      "url": "http://localhost:3003/mcp/"
+      "url": "http://localhost:3003/mcp/",
+      "headers": {
+        "X-Cassis-Root": "${workspaceFolder}"
+      }
     }
   }
 }

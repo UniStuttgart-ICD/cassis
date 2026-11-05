@@ -4,7 +4,8 @@ authors:
   - ICD University of Stuttgart
 description: >
   MCP server for Grasshopper. Agent-side setup is required after installation.
-  Connect your AI client to http://localhost:3003/mcp/. Setup instructions:
+  Connect your AI client to http://localhost:3003/mcp/. Send X-Cassis-Root
+  with the project folder so each window reaches its own Rhino. Setup instructions:
   https://github.com/UniStuttgart-ICD/cassis/blob/main/docs/agent-setup.md
 url: https://github.com/UniStuttgart-ICD/cassis/blob/main/docs/agent-setup.md
 icon: logo/cassis_logo.png

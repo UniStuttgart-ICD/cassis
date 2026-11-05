@@ -53,6 +53,7 @@ Cassis must be configured as an HTTP or Streamable HTTP MCP server, not stdio.
 - OpenCode: `https://opencode.ai/docs/mcp-servers/`
 
 Frameworks name this transport differently (`http`, `url`, or `serverUrl`). The endpoint is always `http://localhost:3003/mcp/`.
+One entry serves every open Rhino on Mac and Windows. Tool calls need the header `X-Cassis-Root` set to the project folder. A missing header is refused.
 
 Before changing a client configuration, show the user the planned file, scope, and
 change, then get permission. Preserve existing servers and settings.
