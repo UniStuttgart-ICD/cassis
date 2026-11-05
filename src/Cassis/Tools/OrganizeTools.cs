@@ -29,11 +29,10 @@ public static class OrganizeTools
         "input↔output pin alignment, then align blocks as wholes. Long wires are hidden on apply. " +
         "Use reflow to also strip islands L-to-R. " +
         "Walks param Sources so panels and sliders count as nodes. " +
-        "Builds an enriched analysis graph (node kinds, data vs display edges) and Leiden communities; " +
-        "dry-run returns graph.modules for the agent to name. " +
+        "Builds an enriched analysis graph and Leiden modules (graph.modules) for the agent to name. " +
+        "Default detail=summary omits per-move dumps (token-cheap); use detail=full for coordinates. " +
         "Existing groups move as rigid supernodes. " +
-        "Optional namedGroups creates a Consolas Scribble title at the top-left and wraps ungrouped members " +
-        "(prefer larger clusters only). " +
+        "Optional namedGroups creates Consolas Scribble titles and wraps ungrouped members. " +
         "Optional componentIds freezes everything else as obstacles.")]
     public static async Task<CallToolResult> OrganizeCanvas(
         [Description("When true, write pivots, optional groups, and hide long wires. Default false returns the plan only.")]
@@ -51,7 +50,9 @@ public static class OrganizeTools
         [Description("Vertical gap between nodes in a layer (default 40).")]
         float rowGap = CanvasLayout.DefaultRowGap,
         [Description("Space above a named block for the Scribble title (default 48).")]
-        float titleBand = CanvasLayout.DefaultTitleBand)
+        float titleBand = CanvasLayout.DefaultTitleBand,
+        [Description("summary (default): counts + Leiden modules only — token-cheap. full: include every move/wireHide/supernode member.")]
+        string detail = "summary")
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -63,6 +64,7 @@ public static class OrganizeTools
             }
 
             var mode = ParseLayoutMode(layoutMode);
+            var detailMode = ParseDetailMode(detail);
             var namedSpecs = ParseNamedGroups(namedGroupsJson);
             HashSet<Guid>? filter = null;
             if (componentIds is { Length: > 0 })
@@ -80,10 +82,16 @@ public static class OrganizeTools
             }
 
             var result = await UiThreadHelper.InvokeAsync(() =>
-                RunOrganize(apply, filter, proposeGroups, namedSpecs, mode, columnGap, rowGap, titleBand));
+                RunOrganize(apply, filter, proposeGroups, namedSpecs, mode, columnGap, rowGap, titleBand, detailMode));
 
             return result;
         }, nameof(OrganizeCanvas));
+    }
+
+    private enum DetailMode
+    {
+        Summary = 0,
+        Full = 1,
     }
 
     private static LayoutMode ParseLayoutMode(string? layoutMode)
@@ -102,6 +110,22 @@ public static class OrganizeTools
         throw new ArgumentException("layoutMode must be \"compact\" or \"reflow\".");
     }
 
+    private static DetailMode ParseDetailMode(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail) ||
+            detail.Equals("summary", StringComparison.OrdinalIgnoreCase))
+        {
+            return DetailMode.Summary;
+        }
+
+        if (detail.Equals("full", StringComparison.OrdinalIgnoreCase))
+        {
+            return DetailMode.Full;
+        }
+
+        throw new ArgumentException("detail must be \"summary\" or \"full\".");
+    }
+
     private static object RunOrganize(
         bool apply,
         HashSet<Guid>? filter,
@@ -110,7 +134,8 @@ public static class OrganizeTools
         LayoutMode mode,
         float columnGap,
         float rowGap,
-        float titleBand)
+        float titleBand,
+        DetailMode detail)
     {
         var doc = Instances.ActiveCanvas?.Document
                   ?? throw new InvalidOperationException("No active Grasshopper document");
@@ -151,16 +176,61 @@ public static class OrganizeTools
             };
         }
 
+        // Summary omits moves/wireHides/supernode members (largest token cost).
+        // Module componentIds stay — needed once for naming (no duplicate groupCandidates).
+        var graphPayload = plan.Graph == null ? null : new
+        {
+            method = plan.Graph.Method,
+            nodeCount = plan.Graph.NodeCount,
+            dataEdges = plan.Graph.DataEdgeCount,
+            displayEdges = plan.Graph.DisplayEdgeCount,
+            kinds = plan.Graph.KindCounts,
+            moduleCount = plan.Graph.Modules.Count,
+            modules = plan.Graph.Modules.Select(m => new
+            {
+                id = m.Id,
+                size = m.MemberIds.Count,
+                componentIds = m.MemberIds.Select(id => id.ToString()),
+            }),
+        };
+
+        if (detail == DetailMode.Summary)
+        {
+            return new
+            {
+                success = true,
+                dryRun = !apply,
+                detail = "summary",
+                layoutMode = mode == LayoutMode.Reflow ? "reflow" : "compact",
+                moveCount = plan.Moves.Count,
+                wireHideCount = plan.WireHides.Count,
+                supernodeCount = plan.Supernodes.Count,
+                scribbleCount = plan.Scribbles.Count,
+                graph = graphPayload,
+                scribbles = plan.Scribbles.Select(s => new
+                {
+                    name = s.Name,
+                    text = s.Text,
+                    x = Math.Round(s.X, 1),
+                    y = Math.Round(s.Y, 1),
+                }),
+                applied,
+                warnings = BuildResponseWarnings(plan.Warnings, filter, apply, undoOk),
+                hint = "Name graph.modules → apply with namedGroupsJson. detail=full only for per-move coords.",
+            };
+        }
+
         return new
         {
             success = true,
             dryRun = !apply,
+            detail = "full",
             layoutMode = mode == LayoutMode.Reflow ? "reflow" : "compact",
             moves = plan.Moves.Select(m => new
             {
                 id = m.Id.ToString(),
-                from = new { x = m.FromX, y = m.FromY },
-                to = new { x = m.ToX, y = m.ToY },
+                from = new { x = Math.Round(m.FromX, 1), y = Math.Round(m.FromY, 1) },
+                to = new { x = Math.Round(m.ToX, 1), y = Math.Round(m.ToY, 1) },
             }),
             supernodes = plan.Supernodes.Select(s => new
             {
@@ -176,8 +246,8 @@ public static class OrganizeTools
             {
                 name = s.Name,
                 text = s.Text,
-                x = s.X,
-                y = s.Y,
+                x = Math.Round(s.X, 1),
+                y = Math.Round(s.Y, 1),
             }),
             wireHides = plan.WireHides.Select(w => new
             {
@@ -185,21 +255,7 @@ public static class OrganizeTools
                 to = w.To.ToString(),
                 length = Math.Round(w.Length, 1),
             }),
-            graph = plan.Graph == null ? null : new
-            {
-                method = plan.Graph.Method,
-                nodeCount = plan.Graph.NodeCount,
-                dataEdges = plan.Graph.DataEdgeCount,
-                displayEdges = plan.Graph.DisplayEdgeCount,
-                kinds = plan.Graph.KindCounts,
-                modules = plan.Graph.Modules.Select(m => new
-                {
-                    id = m.Id,
-                    size = m.MemberIds.Count,
-                    method = m.Method,
-                    componentIds = m.MemberIds.Select(id => id.ToString()),
-                }),
-            },
+            graph = graphPayload,
             applied,
             warnings = BuildResponseWarnings(plan.Warnings, filter, apply, undoOk),
         };
