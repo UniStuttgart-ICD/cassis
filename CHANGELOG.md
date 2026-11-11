@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-11
+
+### Added
+
+- One MCP URL serves several open Rhinos. Send the `X-Cassis-Root` header set to the project folder, and each call runs in the Rhino whose saved Grasshopper file is inside that folder. Without the header, calls work only while one Rhino is open
+- `Organize_Canvas` splits the definition into computational blocks (Leiden modules), lays them out as left-to-right stages, and returns `graph.modules` for naming. With `apply` true it also hides long wires
+- `Organize_Canvas` `detail` parameter: `summary` (default) returns counts and modules only, `full` returns every move
+
 ### Changed
 
+- `Organize_Canvas` default gaps are 120 between layers and 24 between nodes (were 280 and 40)
+- `cassis-organize` skill no longer calls `Get_AllComponents` and `GetAllConnections` before the dry run
 - `Capture_Canvas`, `Save_Visible_Canvas`, `Capture_Viewport`, `Capture_Viewport_Simple` and `Orbit_Object` return the image inline and write no file by default, so captures no longer land on the Desktop or in the plugin folder
 - `Capture_Viewport` and `Orbit_Object` accept `filePath` to also save a PNG, like `Capture_Canvas`. Files you ask for are kept
 - `retentionSeconds` is removed and ignored if sent. The `filePath` and `file` metadata fields only appear when a file was saved; `fileSize` is now the size of the returned image
