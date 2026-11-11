@@ -1,7 +1,7 @@
 # Cassis MCP Configuration by Framework
 
 Cassis runs an HTTP MCP server at `http://localhost:3003/mcp/`.
-One URL serves every open Rhino, on Mac and Windows. Tool calls need the header `X-Cassis-Root` set to the project folder. A missing header is refused.
+One URL serves every open Rhino, on Mac and Windows. Tool calls need the header `X-Cassis-Root` set to the project folder. Without it, calls work only while one Rhino is open.
 Configure it as HTTP or Streamable HTTP, not stdio.
 
 ## Codex

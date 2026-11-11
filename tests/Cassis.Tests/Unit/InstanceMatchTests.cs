@@ -23,6 +23,27 @@ public class InstanceMatchTests
     }
 
     [Test]
+    public void MissingHeader_OnlyThisRhino_RunsHere()
+    {
+        Assert.That(InstanceMatcher.RunsHere(null, new[] { OneFile(1, 10, @"C:\proj\a.gh", @"C:\proj\a.gh") }, selfPid: 1), Is.True);
+        Assert.That(InstanceMatcher.RunsHere(" ", Array.Empty<InstanceSnapshot>(), selfPid: 1), Is.True);
+    }
+
+    [Test]
+    public void MissingHeader_OtherRhinoOpen_DoesNotRunHere()
+    {
+        var instances = new[] { OneFile(1, 10, @"C:\a\a.gh", @"C:\a\a.gh"), OneFile(2, 11, @"C:\b\b.gh", @"C:\b\b.gh") };
+
+        Assert.That(InstanceMatcher.RunsHere(null, instances, selfPid: 1), Is.False);
+    }
+
+    [Test]
+    public void Header_AlwaysRoutes()
+    {
+        Assert.That(InstanceMatcher.RunsHere(@"C:\proj", new[] { OneFile(1, 10, @"C:\proj\a.gh", @"C:\proj\a.gh") }, selfPid: 1), Is.False);
+    }
+
+    [Test]
     public void UnexpandedHeader_DoesNotPickARhino()
     {
         var result = InstanceMatcher.Match("${workspaceFolder}", Array.Empty<InstanceSnapshot>());

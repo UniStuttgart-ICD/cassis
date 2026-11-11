@@ -55,6 +55,14 @@ internal static class InstanceMatcher
     internal const string UnexpandedHeader = "${workspaceFolder}";
     internal static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// True when the call has no header and no other Rhino is registered, so the door runs it itself as in v1.5.
+    /// </summary>
+    public static bool RunsHere(string? header, IReadOnlyList<InstanceSnapshot> instances, int selfPid)
+    {
+        return string.IsNullOrWhiteSpace(header) && instances.All(instance => instance.Pid == selfPid);
+    }
+
     public static InstanceMatchResult Match(string? header, IReadOnlyList<InstanceSnapshot> instances)
     {
         if (string.IsNullOrWhiteSpace(header))

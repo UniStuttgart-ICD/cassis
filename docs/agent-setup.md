@@ -9,7 +9,7 @@ Your AI client must also be connected to Cassis.
 2. Open Grasshopper. The MCP server **auto-starts** on load (all tools enabled) at
    `http://localhost:3003/mcp/`.
    One URL serves every open Rhino, on Mac and Windows. Tool calls need the header
-   `X-Cassis-Root` set to that window's project folder. A missing header is refused.
+   `X-Cassis-Root` set to that window's project folder. Without it, calls work only while one Rhino is open.
 3. Configure your AI client with:
 
    - Transport: Streamable HTTP

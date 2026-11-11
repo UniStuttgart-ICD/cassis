@@ -820,6 +820,11 @@ public static class CassisRuntime
             DateTime.UtcNow,
             InstanceFiles.IsProcessAlive,
             InstanceMatcher.StaleAfter);
+        if (InstanceMatcher.RunsHere(root, instances, Process.GetCurrentProcess().Id))
+        {
+            return null;
+        }
+
         var match = InstanceMatcher.Match(root, instances);
         if (match.Kind != InstanceMatchKind.Ok || string.IsNullOrWhiteSpace(match.DocumentPath))
         {
