@@ -27,7 +27,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     private const int MaxConcurrentRequests = 32;
     private const int MaxRequestBodyBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan RequestBodyTimeout = TimeSpan.FromSeconds(30);
-    private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name";
+    private const string CorsAllowedHeaders = "Content-Type, Accept, Mcp-Session-Id, Origin, Last-Event-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, X-Cassis-Root";
     private static readonly object ServerCapabilities = new { tools = new { }, prompts = new { } };
     private const string MetaVersionKey = "io.modelcontextprotocol/protocolVersion";
     private const string MetaCapabilitiesKey = "io.modelcontextprotocol/clientCapabilities";
@@ -54,6 +54,18 @@ public sealed class HttpListenerMcpTransport : IServerTransport
 
     private CancellationTokenSource? _cts;
     private Task? _listenTask;
+    private static readonly AsyncLocal<string?> WorkspaceRoot = new();
+
+    /// <summary>
+    /// When set, tools/call and prompt methods return this JSON-RPC body instead of running locally.
+    /// The second argument is the X-Cassis-Root header. The third is true for a streamable HTTP request.
+    /// </summary>
+    public Func<JsonRpcRequest, string?, bool, Task<string?>>? RequestRouter { get; set; }
+
+    /// <summary>
+    /// Runs one /cassis/call on the document path, then returns the JSON-RPC response.
+    /// </summary>
+    public Func<string, Func<Task<JsonRpcMessage>>, Task<JsonRpcMessage>>? FocusCall { get; set; }
     private bool _disposed;
     private bool _stopping;
     private readonly object _lock = new object();
@@ -403,8 +415,20 @@ public sealed class HttpListenerMcpTransport : IServerTransport
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken token)
     {
         string path = context.Request.Url?.AbsolutePath.TrimEnd('/') ?? "/";
+        WorkspaceRoot.Value = context.Request.Headers["X-Cassis-Root"];
 
-        // Add debugging to see what's being requested
+        if (path.Equals("/cassis/call", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
+                context.Response.Close();
+                return;
+            }
+
+            await HandleWorkerCallAsync(context, token);
+            return;
+        }
 
         // only accept requests to the configured MCP endpoint or root for legacy SSE
         bool isRoot = string.Equals(path, string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -880,7 +904,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         JsonRpcMessage response;
         try
         {
-            response = await DispatchAsync(request, modern: true).ConfigureAwait(false);
+            response = await DispatchOrRouteAsync(request, modern: true).ConfigureAwait(false);
             MessageReceived?.Invoke(request);
         }
         catch (Exception ex)
@@ -1026,7 +1050,7 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             if (message is JsonRpcRequest request)
             {
 
-                var response = await DispatchAsync(request, modern: false);
+                var response = await DispatchOrRouteAsync(request, modern: false);
 
                 MessageReceived?.Invoke(message);
 
@@ -1068,6 +1092,85 @@ public sealed class HttpListenerMcpTransport : IServerTransport
             }
 
             return false;
+        }
+    }
+
+    private async Task<JsonRpcMessage> DispatchOrRouteAsync(JsonRpcRequest request, bool modern)
+    {
+        if (RequestRouter != null && IsRoutedMethod(request.Method))
+        {
+            var json = await RequestRouter(request, WorkspaceRoot.Value, modern).ConfigureAwait(false);
+            if (json != null)
+            {
+                if (JsonSerializer.Deserialize<JsonRpcMessage>(json) is JsonRpcMessage routed)
+                {
+                    return routed;
+                }
+
+                return CreateErrorResponse(request.Id, -32603, "Internal error", "Could not read the routed response.");
+            }
+        }
+
+        return await DispatchAsync(request, modern).ConfigureAwait(false);
+    }
+
+    private static bool IsRoutedMethod(string? method)
+    {
+        return method is "tools/call" or "prompts/list" or "prompts/get";
+    }
+
+    private async Task HandleWorkerCallAsync(HttpListenerContext context, CancellationToken token)
+    {
+        JsonDocument body;
+        try
+        {
+            using var buffer = new MemoryStream();
+            await CopyToAsyncWithCancellation(context.Request.InputStream, buffer, MaxRequestBodyBytes, token).ConfigureAwait(false);
+            body = JsonDocument.Parse(buffer.ToArray());
+        }
+        catch (Exception)
+        {
+            await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32700, "Parse error")).ConfigureAwait(false);
+            return;
+        }
+
+        using (body)
+        {
+            var root = body.RootElement;
+            var documentPath = root.TryGetProperty("documentPath", out var pathElement) && pathElement.ValueKind == JsonValueKind.String
+                ? pathElement.GetString()
+                : null;
+            var modern = root.TryGetProperty("modern", out var modernElement) && modernElement.ValueKind == JsonValueKind.True;
+            if (!root.TryGetProperty("message", out var messageElement) || messageElement.ValueKind != JsonValueKind.Object)
+            {
+                await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+                return;
+            }
+
+            if (JsonSerializer.Deserialize<JsonRpcMessage>(messageElement.GetRawText()) is not JsonRpcRequest request)
+            {
+                await WriteModernAsync(context, HttpStatusCode.BadRequest, ErrorJson(-32600, "Invalid Request")).ConfigureAwait(false);
+                return;
+            }
+
+            JsonRpcMessage response;
+            try
+            {
+                if (FocusCall != null && !string.IsNullOrWhiteSpace(documentPath))
+                {
+                    response = await FocusCall(documentPath!, () => DispatchAsync(request, modern)).ConfigureAwait(false);
+                }
+                else
+                {
+                    response = await DispatchAsync(request, modern).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                response = CreateErrorResponse(request.Id, -32603, "Internal error", ex.Message);
+            }
+
+            await WriteModernAsync(context, HttpStatusCode.OK, JsonSerializer.Serialize(response)).ConfigureAwait(false);
         }
     }
 

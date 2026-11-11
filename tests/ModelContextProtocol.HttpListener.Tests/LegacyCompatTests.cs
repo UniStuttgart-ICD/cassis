@@ -258,6 +258,7 @@ public sealed class LegacyCompatTests
             Assert.That(allowed, Does.Contain("Mcp-Method"));
             Assert.That(allowed, Does.Contain("Mcp-Name"));
             Assert.That(allowed, Does.Contain("Mcp-Session-Id"));
+            Assert.That(allowed, Does.Contain("X-Cassis-Root"));
         });
     }
 
