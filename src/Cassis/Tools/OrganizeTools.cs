@@ -23,31 +23,36 @@ public static class OrganizeTools
 {
     [McpServerTool(Name = "Organize_Canvas")]
     [Description(
-        "Plans a left-to-right layered layout for the active Grasshopper canvas. " +
+        "Plans a left-to-right layout for the active Grasshopper canvas. " +
         "Default is dry-run (apply false). Set apply true to move pivots in one batch. " +
-        "Default layoutMode is compact: keep places, push apart X-overlapping stacks. " +
-        "Use reflow for a full L-to-R Sugiyama strip with rank wrap. " +
+        "Default layoutMode is compact: organize computational blocks (function clusters) first with " +
+        "input↔output pin alignment, then align blocks as wholes. Long wires are hidden on apply. " +
+        "Use reflow to also strip islands L-to-R. " +
         "Walks param Sources so panels and sliders count as nodes. " +
+        "Builds an enriched analysis graph and Leiden modules (graph.modules) for the agent to name. " +
+        "Default detail=summary omits per-move dumps (token-cheap); use detail=full for coordinates. " +
         "Existing groups move as rigid supernodes. " +
-        "Optional namedGroups creates a Consolas Scribble title at the top-left and wraps ungrouped members. " +
+        "Optional namedGroups creates Consolas Scribble titles and wraps ungrouped members. " +
         "Optional componentIds freezes everything else as obstacles.")]
     public static async Task<CallToolResult> OrganizeCanvas(
-        [Description("When true, write pivots and optional groups. Default false returns the plan only.")]
+        [Description("When true, write pivots, optional groups, and hide long wires. Default false returns the plan only.")]
         bool apply = false,
         [Description("Optional InstanceGuids to move. Omit to organize the whole document. Others stay fixed.")]
         string[]? componentIds = null,
-        [Description("When true, return groupCandidates for ungrouped islands. Agent must supply names via namedGroups.")]
+        [Description("When true, return groupCandidates from Leiden modules. Agent supplies names via namedGroups.")]
         bool proposeGroups = false,
         [Description("Optional named groups as JSON array of {name, componentIds, color?}. Applied only when apply is true and ids are ungrouped.")]
         string? namedGroupsJson = null,
-        [Description("compact (default) keeps island places; reflow packs islands L-to-R.")]
+        [Description("compact (default) packs computational blocks then aligns them; reflow also places islands L-to-R.")]
         string layoutMode = "compact",
-        [Description("Horizontal gap between layers (default 280).")]
+        [Description("Horizontal gap between layers (default 120).")]
         float columnGap = CanvasLayout.DefaultColumnGap,
-        [Description("Vertical gap between nodes in a layer (default 40).")]
+        [Description("Vertical gap between nodes in a layer (default 24).")]
         float rowGap = CanvasLayout.DefaultRowGap,
         [Description("Space above a named block for the Scribble title (default 48).")]
-        float titleBand = CanvasLayout.DefaultTitleBand)
+        float titleBand = CanvasLayout.DefaultTitleBand,
+        [Description("summary (default): counts + Leiden modules only — token-cheap. full: include every move/wireHide/supernode member.")]
+        string detail = "summary")
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -59,6 +64,7 @@ public static class OrganizeTools
             }
 
             var mode = ParseLayoutMode(layoutMode);
+            var detailMode = ParseDetailMode(detail);
             var namedSpecs = ParseNamedGroups(namedGroupsJson);
             HashSet<Guid>? filter = null;
             if (componentIds is { Length: > 0 })
@@ -76,10 +82,16 @@ public static class OrganizeTools
             }
 
             var result = await UiThreadHelper.InvokeAsync(() =>
-                RunOrganize(apply, filter, proposeGroups, namedSpecs, mode, columnGap, rowGap, titleBand));
+                RunOrganize(apply, filter, proposeGroups, namedSpecs, mode, columnGap, rowGap, titleBand, detailMode));
 
             return result;
         }, nameof(OrganizeCanvas));
+    }
+
+    private enum DetailMode
+    {
+        Summary = 0,
+        Full = 1,
     }
 
     private static LayoutMode ParseLayoutMode(string? layoutMode)
@@ -98,6 +110,22 @@ public static class OrganizeTools
         throw new ArgumentException("layoutMode must be \"compact\" or \"reflow\".");
     }
 
+    private static DetailMode ParseDetailMode(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail) ||
+            detail.Equals("summary", StringComparison.OrdinalIgnoreCase))
+        {
+            return DetailMode.Summary;
+        }
+
+        if (detail.Equals("full", StringComparison.OrdinalIgnoreCase))
+        {
+            return DetailMode.Full;
+        }
+
+        throw new ArgumentException("detail must be \"summary\" or \"full\".");
+    }
+
     private static object RunOrganize(
         bool apply,
         HashSet<Guid>? filter,
@@ -106,7 +134,8 @@ public static class OrganizeTools
         LayoutMode mode,
         float columnGap,
         float rowGap,
-        float titleBand)
+        float titleBand,
+        DetailMode detail)
     {
         var doc = Instances.ActiveCanvas?.Document
                   ?? throw new InvalidOperationException("No active Grasshopper document");
@@ -125,10 +154,13 @@ public static class OrganizeTools
 
         object? applied = null;
         var undoOk = false;
+        var wiresHidden = 0;
         if (apply)
         {
             undoOk = TryBeginUndo(doc, "Cassis Organize Canvas");
             ApplyMoves(doc, plan.Moves);
+            ResetWireDisplays(doc);
+            wiresHidden = ApplyWireHides(doc, plan.WireHides);
             var groupResults = new List<object>();
             foreach (var ng in namedSpecs)
             {
@@ -139,8 +171,53 @@ public static class OrganizeTools
             applied = new
             {
                 moveCount = plan.Moves.Count,
+                wiresHidden,
                 groups = groupResults,
                 undoRecorded = undoOk,
+            };
+        }
+
+        // Summary omits moves/wireHides/supernode members (largest token cost).
+        // Module componentIds stay — needed once for naming (no duplicate groupCandidates).
+        var graphPayload = plan.Graph == null ? null : new
+        {
+            method = plan.Graph.Method,
+            nodeCount = plan.Graph.NodeCount,
+            dataEdges = plan.Graph.DataEdgeCount,
+            displayEdges = plan.Graph.DisplayEdgeCount,
+            kinds = plan.Graph.KindCounts,
+            moduleCount = plan.Graph.Modules.Count,
+            modules = plan.Graph.Modules.Select(m => new
+            {
+                id = m.Id,
+                size = m.MemberIds.Count,
+                componentIds = m.MemberIds.Select(id => id.ToString()),
+            }),
+        };
+
+        if (detail == DetailMode.Summary)
+        {
+            return new
+            {
+                success = true,
+                dryRun = !apply,
+                detail = "summary",
+                layoutMode = mode == LayoutMode.Reflow ? "reflow" : "compact",
+                moveCount = plan.Moves.Count,
+                wireHideCount = plan.WireHides.Count,
+                supernodeCount = plan.Supernodes.Count,
+                scribbleCount = plan.Scribbles.Count,
+                graph = graphPayload,
+                scribbles = plan.Scribbles.Select(s => new
+                {
+                    name = s.Name,
+                    text = s.Text,
+                    x = Math.Round(s.X, 1),
+                    y = Math.Round(s.Y, 1),
+                }),
+                applied,
+                warnings = BuildResponseWarnings(plan.Warnings, filter, apply, undoOk),
+                hint = "Name graph.modules → apply with namedGroupsJson. detail=full only for per-move coords.",
             };
         }
 
@@ -148,12 +225,13 @@ public static class OrganizeTools
         {
             success = true,
             dryRun = !apply,
+            detail = "full",
             layoutMode = mode == LayoutMode.Reflow ? "reflow" : "compact",
             moves = plan.Moves.Select(m => new
             {
                 id = m.Id.ToString(),
-                from = new { x = m.FromX, y = m.FromY },
-                to = new { x = m.ToX, y = m.ToY },
+                from = new { x = Math.Round(m.FromX, 1), y = Math.Round(m.FromY, 1) },
+                to = new { x = Math.Round(m.ToX, 1), y = Math.Round(m.ToY, 1) },
             }),
             supernodes = plan.Supernodes.Select(s => new
             {
@@ -169,9 +247,16 @@ public static class OrganizeTools
             {
                 name = s.Name,
                 text = s.Text,
-                x = s.X,
-                y = s.Y,
+                x = Math.Round(s.X, 1),
+                y = Math.Round(s.Y, 1),
             }),
+            wireHides = plan.WireHides.Select(w => new
+            {
+                from = w.From.ToString(),
+                to = w.To.ToString(),
+                length = Math.Round(w.Length, 1),
+            }),
+            graph = graphPayload,
             applied,
             warnings = BuildResponseWarnings(plan.Warnings, filter, apply, undoOk),
         };
@@ -249,23 +334,50 @@ public static class OrganizeTools
                 frozen = true;
             }
 
-            nodes.Add(new LayoutNode(obj.InstanceGuid, pivot.X, pivot.Y, w, h, frozen));
+            var nick = obj.NickName;
+            if (string.IsNullOrWhiteSpace(nick))
+            {
+                nick = obj.Name;
+            }
+
+            nodes.Add(new LayoutNode(
+                obj.InstanceGuid,
+                pivot.X,
+                pivot.Y,
+                w,
+                h,
+                frozen,
+                ClassifyNodeKind(obj),
+                nick));
         }
 
         var nodeSet = nodes.Select(n => n.Id).ToHashSet();
         var edges = new List<LayoutEdge>();
-        var edgeSet = new HashSet<(Guid, Guid)>();
+        var edgeSet = new HashSet<(Guid, Guid, LayoutEdgeRole)>();
 
-        void AddEdge(Guid from, Guid to)
+        void AddEdge(Guid from, Guid to, LayoutEdgeRole role)
         {
             if (from == to || !nodeSet.Contains(from) || !nodeSet.Contains(to))
             {
                 return;
             }
 
-            if (edgeSet.Add((from, to)))
+            // Prefer Data if both roles appear on the same pair.
+            var key = (from, to, role);
+            if (role == LayoutEdgeRole.Display && edgeSet.Contains((from, to, LayoutEdgeRole.Data)))
             {
-                edges.Add(new LayoutEdge(from, to));
+                return;
+            }
+
+            if (role == LayoutEdgeRole.Data)
+            {
+                edgeSet.Remove((from, to, LayoutEdgeRole.Display));
+                edges.RemoveAll(e => e.From == from && e.To == to && e.Role == LayoutEdgeRole.Display);
+            }
+
+            if (edgeSet.Add(key))
+            {
+                edges.Add(new LayoutEdge(from, to, role));
             }
         }
 
@@ -283,6 +395,7 @@ public static class OrganizeTools
                     continue;
                 }
 
+                var role = ClassifyEdgeRole(obj, param);
                 foreach (var src in param.Sources)
                 {
                     if (src == null)
@@ -292,12 +405,56 @@ public static class OrganizeTools
 
                     var fromOwner = ResolveOwnerGuid(src);
                     var toOwner = obj.InstanceGuid;
-                    AddEdge(fromOwner, toOwner);
+                    AddEdge(fromOwner, toOwner, role);
                 }
             }
         }
 
         return (nodes, edges, memberships, expandedGrouped);
+    }
+
+    private static LayoutNodeKind ClassifyNodeKind(IGH_DocumentObject obj)
+    {
+        if (obj is GH_Scribble)
+        {
+            return LayoutNodeKind.Chrome;
+        }
+
+        if (obj is GH_Panel)
+        {
+            return LayoutNodeKind.Panel;
+        }
+
+        if (obj is GH_NumberSlider)
+        {
+            return LayoutNodeKind.Slider;
+        }
+
+        var name = obj.Name ?? string.Empty;
+        if (name.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LayoutNodeKind.Other;
+        }
+
+        return LayoutNodeKind.Compute;
+    }
+
+    private static LayoutEdgeRole ClassifyEdgeRole(IGH_DocumentObject toObj, IGH_Param param)
+    {
+        var name = toObj.Name ?? string.Empty;
+        if (name.IndexOf("preview", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LayoutEdgeRole.Display;
+        }
+
+        var nick = param.NickName ?? param.Name ?? string.Empty;
+        if (nick.IndexOf("prev", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            nick.IndexOf("draw", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return LayoutEdgeRole.Display;
+        }
+
+        return LayoutEdgeRole.Data;
     }
 
     private static IEnumerable<Guid> ExpandLeaves(
@@ -377,6 +534,92 @@ public static class OrganizeTools
             obj.Attributes.ExpireLayout();
         }
     }
+
+    /// <summary>
+    /// Restore default wire display so a prior organize does not leave sticky hides.
+    /// </summary>
+    private static void ResetWireDisplays(GH_Document doc)
+    {
+        foreach (var obj in doc.Objects)
+        {
+            if (obj is GH_Group)
+            {
+                continue;
+            }
+
+            foreach (var param in EnumerateParams(obj))
+            {
+                if (param.WireDisplay == GH_ParamWireDisplay.hidden)
+                {
+                    param.WireDisplay = GH_ParamWireDisplay.@default;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Hide wires into destination params when the laid-out span is too long (GH_ParamWireDisplay.hidden).
+    /// GH can only hide per-param, not per-wire — hide only when every source is a long hop.
+    /// </summary>
+    private static int ApplyWireHides(GH_Document doc, IReadOnlyList<WireHideHint> hints)
+    {
+        if (hints.Count == 0)
+        {
+            return 0;
+        }
+
+        var hidePairs = hints.Select(h => (h.From, h.To)).ToHashSet();
+        var count = 0;
+        foreach (var obj in doc.Objects)
+        {
+            if (obj is GH_Group)
+            {
+                continue;
+            }
+
+            foreach (var param in EnumerateParams(obj))
+            {
+                if (param.SourceCount == 0)
+                {
+                    continue;
+                }
+
+                var toOwner = obj.InstanceGuid;
+                var sourceCount = 0;
+                var matchingHides = 0;
+                foreach (var src in param.Sources)
+                {
+                    if (src == null)
+                    {
+                        continue;
+                    }
+
+                    sourceCount++;
+                    var fromOwner = ResolveOwnerGuid(src);
+                    if (hidePairs.Contains((fromOwner, toOwner)))
+                    {
+                        matchingHides++;
+                    }
+                }
+
+                if (!ShouldHideParamWires(sourceCount, matchingHides))
+                {
+                    continue;
+                }
+
+                param.WireDisplay = GH_ParamWireDisplay.hidden;
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// GH WireDisplay is per-param. Only hide when every live source is a long hop.
+    /// </summary>
+    internal static bool ShouldHideParamWires(int sourceCount, int matchingHideSources) =>
+        sourceCount > 0 && matchingHideSources >= sourceCount;
 
     private static object ApplyNamedGroup(
         GH_Document doc,

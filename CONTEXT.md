@@ -36,7 +36,7 @@ _Avoid_: Label, Annotation
 The dry-run result of Organize_Canvas: proposed pivots, optional group candidates, and scribble positions.
 
 **Layout mode**:
-`compact` (default) keeps component places and pushes apart X-overlapping stacks. `reflow` runs Sugiyama per island, wraps tall ranks, and places islands on an L-to-R strip.
+`compact` (default) packs computational blocks (function clusters) L→R with input↔output pin align, then top-aligns blocks; long wires are hidden on apply. `reflow` does the same per island, then places islands on an L-to-R strip.
 _Avoid_: Snapshot (canvas inventory / image tools)
 
 **Canvas**:
