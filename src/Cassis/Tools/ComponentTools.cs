@@ -42,7 +42,9 @@ public static class ComponentTools
         [Description("Gap used only when avoidOverlap is true (default 16)")]
         float padding = CanvasPlacement.DefaultPadding,
         [Description("When true, nudge away from overlapping components (default true). For designed grids prefer false and pick clear coords.")]
-        bool avoidOverlap = true)
+        bool avoidOverlap = true,
+        [Description("Nickname shown on the canvas. Required for script components: say what the script does.")]
+        string? nickname = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -54,7 +56,7 @@ public static class ComponentTools
             McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
             padding = CanvasPlacement.ValidatePadding(padding);
 
-            var result = await componentService.AddComponentAsync(type, x, y, padding, avoidOverlap);
+            var result = await componentService.AddComponentAsync(type, x, y, padding, avoidOverlap, nickname);
 
             return new CallToolResult
             {
@@ -198,7 +200,9 @@ public static class ComponentTools
         [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
         float padding = CanvasPlacement.DefaultPadding,
         [Description("When true, nudge away from overlapping components (default true)")]
-        bool avoidOverlap = true)
+        bool avoidOverlap = true,
+        [Description("Nickname that says what the script does")]
+        string? nickname = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -236,7 +240,7 @@ public static class ComponentTools
                 // Fallback to trying different component names for empty script components
                 foreach (var name in candidateNames)
                 {
-                    var attempt = await componentService.AddComponentAsync(name, x, y, padding, avoidOverlap);
+                    var attempt = await componentService.AddComponentAsync(name, x, y, padding, avoidOverlap, nickname);
                     if (attempt.Success)
                     {
                         success = attempt;
@@ -280,7 +284,9 @@ public static class ComponentTools
         [Description("Minimum gap in canvas units between this component and neighbors (default 16)")]
         float padding = CanvasPlacement.DefaultPadding,
         [Description("When true, nudge away from overlapping components (default true)")]
-        bool avoidOverlap = true)
+        bool avoidOverlap = true,
+        [Description("Nickname that says what the script does")]
+        string? nickname = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -318,7 +324,7 @@ public static class ComponentTools
                 // Fallback to trying different component names for empty script components
                 foreach (var name in candidateNames)
                 {
-                    var attempt = await componentService.AddComponentAsync(name, x, y, padding, avoidOverlap);
+                    var attempt = await componentService.AddComponentAsync(name, x, y, padding, avoidOverlap, nickname);
                     if (attempt.Success)
                     {
                         success = attempt;
@@ -492,8 +498,8 @@ public static class ComponentTools
         IGrasshopperComponentService componentService,
         [Description("Array of component GUIDs to include in the group")]
         string[] componentIds,
-        [Description("Name for the group (optional)")]
-        string? groupName = null,
+        [Description("Name that says what the group does; it is the chapter title in Canvas_Outline")]
+        string groupName,
         [Description("Color for the group in hex format (optional, e.g., '#FF0000' for red)")]
         string? groupColor = null)
     {
@@ -501,7 +507,8 @@ public static class ComponentTools
         {
             McpExtensions.ValidateRequired(
                 (nameof(componentService), componentService),
-                (nameof(componentIds), componentIds));
+                (nameof(componentIds), componentIds),
+                (nameof(groupName), groupName));
 
             if (componentIds.Length == 0)
             {

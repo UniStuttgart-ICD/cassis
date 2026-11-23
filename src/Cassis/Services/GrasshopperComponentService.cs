@@ -35,6 +35,7 @@ public class GrasshopperComponentService : IGrasshopperComponentService
 
     public async Task<ComponentCreationResult> AddComponentAsync(string type, double x, double y,
         float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
+        string? nickName = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(type))
@@ -56,6 +57,18 @@ public class GrasshopperComponentService : IGrasshopperComponentService
                 {
                     return CreateErrorResult($"Could not create component of type '{type}'");
                 }
+                if (nickName is not null &&
+                    (string.IsNullOrWhiteSpace(nickName) || nickName.IndexOfAny(new[] { '\r', '\n' }) >= 0))
+                {
+                    return CreateErrorResult("nickname must be one non-empty line");
+                }
+                // A script is a book section; its nickname is the section title.
+                if (nickName is null && ScriptComponentKind.GetLanguage(component) is not null)
+                {
+                    return CreateErrorResult("Script components require a nickname that says what they do");
+                }
+                if (nickName is not null)
+                    component.NickName = nickName;
 
                 var placement = AddComponentToDocument(doc, component, x, y, padding, avoidOverlap);
 
