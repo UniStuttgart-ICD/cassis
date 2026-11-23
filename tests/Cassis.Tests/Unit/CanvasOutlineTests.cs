@@ -147,6 +147,25 @@ public class CanvasOutlineTests
         Assert.That(CanvasOutline.ScriptHeader(code, language), Is.EqualTo(expected));
     }
 
+    [TestCase("abc123", true)]
+    [TestCase(" ABC123 ", true)]
+    [TestCase("other", false)]
+    [TestCase("", false)]
+    [TestCase(null, false)]
+    public void Reply_IsShortOnlyWhenTheCallerHasTheCurrentRevision(string? known, bool unchanged)
+    {
+        var reply = Cassis.Tools.OutlineTools.Reply(
+            new Dictionary<string, object?> { ["title"] = "Book" },
+            "abc123",
+            known);
+
+        Assert.That(reply["revision"], Is.EqualTo("abc123"));
+        if (unchanged)
+            Assert.That(reply.Keys, Is.EquivalentTo(new[] { "unchanged", "revision" }));
+        else
+            Assert.That(reply["title"], Is.EqualTo("Book"));
+    }
+
     [Test]
     public void Registry_ExposesTheBookToolsByDefault()
     {

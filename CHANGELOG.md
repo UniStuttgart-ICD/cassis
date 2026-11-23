@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Canvas_Outline`: the canvas as a book. Groups are chapters with subchapters, script nicknames, wire flow between chapters, and gaps (unnamed groups, default script names, ungrouped components, empty and overlapping groups). Includes `revision`, a SHA-256 of the document, so a client sees when the canvas changed. No script source
 - `Canvas_Chapter`: one chapter with component ids, GUIDs, pivots, script summaries (language, lines, header comment), inner wires and boundary wires
 - `Rename_Objects`: renames groups and components in one call; restores every earlier name if a write fails
+- `knownRevision` on `Canvas_Outline` and `Canvas_Chapter`: when the canvas has not changed, the reply is only `{"unchanged":true,"revision":...}`
 - Server instructions: read the outline first, name groups and scripts, report gaps once
 - The outline uses the same rules and numbering as `ghsh ghjson query --section outline`
 

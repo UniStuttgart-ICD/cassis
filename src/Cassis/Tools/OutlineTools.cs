@@ -21,16 +21,21 @@ public static class OutlineTools
         "subchapters, script nicknames, wire flow between chapters (\"from>toxCount\"), and gaps " +
         "(unnamed groups, default script names, ungrouped components). Titles with derived=true " +
         "were made up by Cassis. No script source. Then call Canvas_Chapter for one chapter. " +
-        "revision changes whenever the canvas changes; refs are valid for that revision.")]
-    public static async Task<CallToolResult> Outline()
+        "revision changes whenever the canvas changes; refs are valid for that revision. " +
+        "To re-check later, pass that revision as knownRevision: an unchanged canvas returns " +
+        "only {unchanged:true, revision}.")]
+    public static async Task<CallToolResult> Outline(
+        [Description("revision of your last Canvas_Outline answer; omit for a first read")]
+        string? knownRevision = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
             await UiThreadHelper.InvokeAsync<object>(() =>
             {
                 var doc = ActiveDocument();
-                var outline = CanvasOutline.Outline(LiveCanvasOutline.Read(doc));
-                outline["revision"] = LiveCanvasOutline.Revision(doc);
-                return outline;
+                return Reply(
+                    CanvasOutline.Outline(LiveCanvasOutline.Read(doc)),
+                    LiveCanvasOutline.Revision(doc),
+                    knownRevision);
             }), "Canvas_Outline");
     }
 
@@ -38,10 +43,13 @@ public static class OutlineTools
     [Description(
         "Returns one chapter of Canvas_Outline: its components with ids, GUIDs and pivots, script " +
         "summaries (language, lines, header comment; no source), wires inside the chapter and " +
-        "boundary wires to other chapters, written \"fromId.port>toId.port\".")]
+        "boundary wires to other chapters, written \"fromId.port>toId.port\". To re-check a " +
+        "chapter you already read, pass its revision as knownRevision.")]
     public static async Task<CallToolResult> Chapter(
         [Description("Chapter ref from Canvas_Outline, a group InstanceGuid, or 'ungrouped'")]
-        string group)
+        string group,
+        [Description("revision of your last answer for this same chapter; omit for a first read")]
+        string? knownRevision = null)
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
@@ -58,10 +66,21 @@ public static class OutlineTools
                 {
                     throw new ArgumentException(exception.Message);
                 }
-                chapter["revision"] = LiveCanvasOutline.Revision(doc);
-                return chapter;
+                return Reply(chapter, LiveCanvasOutline.Revision(doc), knownRevision);
             });
         }, "Canvas_Chapter");
+    }
+
+    // The answer is always built, so a bad ref still fails; only the reply is shortened.
+    internal static Dictionary<string, object?> Reply(
+        Dictionary<string, object?> answer,
+        string revision,
+        string? knownRevision)
+    {
+        if (string.Equals(knownRevision?.Trim(), revision, StringComparison.OrdinalIgnoreCase))
+            return new Dictionary<string, object?> { ["unchanged"] = true, ["revision"] = revision };
+        answer["revision"] = revision;
+        return answer;
     }
 
     [McpServerTool(Name = "Rename_Objects")]

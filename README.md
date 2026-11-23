@@ -136,7 +136,7 @@ Tools are organized by category. Default-enabled tools marked with **(D)**.
 | **Solver** | `getsolutionstate` **(D)**, `forcedocumentsolution`, `toggle_solverexecute` |
 | **Diagnostics** | `getsystemhealth`, `runhealthcheck`, `listhealthchecks` |
 
-Start a canvas with `canvas_outline`. It reads the canvas as a book: groups are chapters, and it lists script nicknames, the wire flow between chapters, and naming gaps. Then `canvas_chapter` opens one chapter. Neither returns script source. Cassis sends the same rule to clients as server instructions.
+Start a canvas with `canvas_outline`. It reads the canvas as a book: groups are chapters, and it lists script nicknames, the wire flow between chapters, and naming gaps. Then `canvas_chapter` opens one chapter. Neither returns script source. To re-check after edits, pass the last `revision` as `knownRevision`: an unchanged canvas returns only `{"unchanged":true}`. Cassis sends the same rule to clients as server instructions.
 
 Prompts are also available for creating, analyzing, and troubleshooting Grasshopper definitions.
 
