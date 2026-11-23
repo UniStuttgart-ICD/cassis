@@ -1209,18 +1209,17 @@ public sealed class HttpListenerMcpTransport : IServerTransport
         var serverInfo = _options.ServerInfo
             ?? throw new InvalidOperationException("MCP server information is not configured.");
 
-        var response = new JsonRpcResponse
+        var result = JsonSerializer.SerializeToNode(new
         {
-            Id = request.Id,
-            Result = JsonSerializer.SerializeToNode(new
-            {
-                protocolVersion = "2025-06-18",
-                capabilities = ServerCapabilities,
-                serverInfo
-            })
-        };
+            protocolVersion = "2025-06-18",
+            capabilities = ServerCapabilities,
+            serverInfo
+        })!.AsObject();
+        // Clients on the 2025-06-18 protocol read instructions only from initialize.
+        if (_options.ServerInstructions is { } instructions)
+            result["instructions"] = instructions;
 
-        return response;
+        return new JsonRpcResponse { Id = request.Id, Result = result };
     }
 
     /// <summary>
