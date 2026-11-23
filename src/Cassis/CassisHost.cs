@@ -70,6 +70,16 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
 
         var assemblyVersion = typeof(CassisHost).Assembly.GetName().Version
             ?? throw new InvalidOperationException("Cassis assembly version is unavailable.");
+        // Same rules as the ghsh skill: groups are chapters, names carry the meaning.
+        const string ServerInstructions =
+            "Read a Grasshopper canvas as a book: groups are chapters. Start with Canvas_Outline, " +
+            "then open one chapter with Canvas_Chapter, then read single components or scripts. " +
+            "Do not start with Get_AllComponents or GetAllConnections. Name every group by what it " +
+            "does, put new components into a group, and give every script a nickname and a header " +
+            "comment (purpose, inputs, outputs). Rename with Rename_Objects; propose names to the " +
+            "user before renaming their objects. When the outline lists gaps, tell the user once and " +
+            "offer to fix them. revision changes when the canvas changes; to re-check, call Canvas_Outline " +
+            "with knownRevision set to the last revision, which returns only {unchanged:true} when nothing changed.";
         var options = new McpServerOptions
         {
             ServerInfo = new Implementation
@@ -78,6 +88,7 @@ public sealed class CassisHost : IAsyncDisposable, IDisposable
                 Title = "Cassis",
                 Version = assemblyVersion.ToString(3),
             },
+            ServerInstructions = ServerInstructions,
         };
 
         Rhino.RhinoApp.WriteLine("[MCP] CassisHost constructor: Creating transport...");

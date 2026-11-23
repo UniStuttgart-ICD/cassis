@@ -17,6 +17,7 @@ public interface IGrasshopperComponentService
     /// </summary>
     Task<ComponentCreationResult> AddComponentAsync(string type, double x, double y,
         float padding = CanvasPlacement.DefaultPadding, bool avoidOverlap = true,
+        string? nickName = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

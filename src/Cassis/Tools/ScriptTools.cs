@@ -413,7 +413,7 @@ public static class ScriptTools
         return string.Empty;
     }
 
-    private static string? TryExtractScript(IGH_DocumentObject component)
+    internal static string? TryExtractScript(IGH_DocumentObject component)
     {
         try
         {
@@ -741,6 +741,7 @@ public static class ScriptTools
     [Description("Adds a C# Script component to the Grasshopper canvas and optionally sets its script. Rhino 8 defaults are outputs 'out' and lowercase 'a' (not 'A'); use script-mode like `a = ...;` or SDK-mode with `RunScript(..., ref object a)`. For nontrivial scripts, check https://developer.rhino3d.com/guides/scripting/scripting-gh-csharp/ first.")]
     public static async Task<CallToolResult> AddCSharpScriptComponent(
         IGrasshopperComponentService componentService,
+        [Description("Nickname that says what the script does; it is the section title in Canvas_Outline")] string nickname,
         [Description("X coordinate on the canvas")] double x = 100,
         [Description("Y coordinate on the canvas")] double y = 100,
         [Description("Optional C# script source. Default result output is lowercase 'a'; call Get_CSharp_Script_Errors after setting.")] string? script = null,
@@ -751,6 +752,9 @@ public static class ScriptTools
     {
         return await McpExtensions.SafeExecuteAsync(async () =>
         {
+            McpExtensions.ValidateRequired((nameof(nickname), nickname));
+            if (nickname.IndexOfAny(new[] { '\r', '\n' }) >= 0)
+                throw new ArgumentException("nickname must be one line");
             McpExtensions.ValidateRange(nameof(x), x, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
             McpExtensions.ValidateRange(nameof(y), y, -CanvasPlacement.CanvasLimit, CanvasPlacement.CanvasLimit);
             padding = CanvasPlacement.ValidatePadding(padding);
@@ -772,6 +776,7 @@ public static class ScriptTools
                         if (component == null) continue;
 
                         component.CreateAttributes();
+                        component.NickName = nickname;
                         doc.AddObject(component, false);
 
                         var requested = new PointF((float)x, (float)y);
@@ -1089,7 +1094,7 @@ public static class ScriptTools
         };
     }
 
-    private static bool IsReservedScriptOutput(IGH_Component component, int index)
+    internal static bool IsReservedScriptOutput(IGH_Component component, int index)
     {
         if (index != 0) return false;
         var typeName = component.GetType().FullName?.ToLowerInvariant() ?? string.Empty;

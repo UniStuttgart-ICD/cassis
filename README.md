@@ -126,7 +126,8 @@ Tools are organized by category. Default-enabled tools marked with **(D)**.
 
 | Category | Examples |
 |----------|----------|
-| **Components** | `addcomponent` **(D)**, `move_component` **(D)**, `removecomponents` **(D)**, `getdetailedcomponentinfo`, `set_component_value` |
+| **Read the canvas** | `canvas_outline` **(D)**, `canvas_chapter` **(D)** |
+| **Components** | `addcomponent` **(D)**, `move_component` **(D)**, `removecomponents` **(D)**, `rename_objects` **(D)**, `getdetailedcomponentinfo`, `set_component_value` |
 | **Scripts** | `list_csharp_scripts` **(D)**, `edit_csharp_script` **(D)**, `add_script_parameter` |
 | **Connections** | `getallconnections` **(D)**, `connect_components_by_name`, `validateconnection` |
 | **Panels** | `list_panels` **(D)**, `get_panel_text` **(D)**, `set_panel_text` **(D)** |
@@ -134,6 +135,8 @@ Tools are organized by category. Default-enabled tools marked with **(D)**.
 | **Canvas and viewport** | `canvas_snapshot` **(D)**, `capture_viewport` **(D)**, `focus_components` **(D)**, `manage_namedviews` **(D)** |
 | **Solver** | `getsolutionstate` **(D)**, `forcedocumentsolution`, `toggle_solverexecute` |
 | **Diagnostics** | `getsystemhealth`, `runhealthcheck`, `listhealthchecks` |
+
+Start a canvas with `canvas_outline`. It reads the canvas as a book: groups are chapters, and it lists script nicknames, the wire flow between chapters, and naming gaps. Then `canvas_chapter` opens one chapter. Neither returns script source. To re-check after edits, pass the last `revision` as `knownRevision`: an unchanged canvas returns only `{"unchanged":true}`. Cassis sends the same rule to clients as server instructions.
 
 Prompts are also available for creating, analyzing, and troubleshooting Grasshopper definitions.
 

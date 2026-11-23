@@ -141,7 +141,7 @@ public static class ConnectionTools
     }
 
     [McpServerTool(Name = "GetAllConnections")]
-    [Description("Returns a snapshot of all connections between components in the active document")]
+    [Description("Returns a snapshot of all connections between components in the active document. Large; for a first read use Canvas_Outline, which shows wires per chapter.")]
     public static async Task<CallToolResult> GetAllConnections()
     {
         return await McpExtensions.SafeExecuteAsync(async () =>

@@ -58,7 +58,7 @@ public static class ComponentAnalyticsTools
     }
 
     [McpServerTool(Name = "Get_AllComponents")]
-    [Description("Lists all components in the active document with category and canvas location metadata")]
+    [Description("Lists all components in the active document with category and canvas location metadata. Large; for a first read use Canvas_Outline.")]
     public static async Task<CallToolResult> GetAllComponents()
     {
         return await McpExtensions.SafeExecuteAsync(async () =>

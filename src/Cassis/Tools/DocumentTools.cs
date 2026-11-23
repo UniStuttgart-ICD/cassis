@@ -305,7 +305,7 @@ public static class DocumentTools
     }
 
     [McpServerTool(Name = "Canvas_Snapshot")]
-    [Description("Returns a compact token-efficient map of the active canvas: toggles, sliders, panels, scripts, groups, and errors.")]
+    [Description("Returns a compact token-efficient map of the active canvas: toggles, sliders, panels, scripts, groups, and errors. For a first read of a canvas use Canvas_Outline.")]
     public static async Task<CallToolResult> CanvasSnapshot()
     {
         return await McpExtensions.SafeExecuteAsync(async () =>

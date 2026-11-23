@@ -35,6 +35,27 @@ public sealed class LegacyCompatTests
     }
 
     [Test]
+    public async Task L1b_InitializeReturnsServerInstructions()
+    {
+        var options = new McpServerOptions
+        {
+            ServerInfo = new Implementation { Name = "Cassis", Version = "1.0.0" },
+            ServerInstructions = "Start with Canvas_Outline."
+        };
+
+        await WithTransportAsync(async (prefix, client) =>
+        {
+            var response = await PostAsync(client, prefix, Rpc(1, "initialize",
+                """{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"1"}}"""));
+
+            using var json = ParseSseData(response.Body);
+            Assert.That(
+                json.RootElement.GetProperty("result").GetProperty("instructions").GetString(),
+                Is.EqualTo("Start with Canvas_Outline."));
+        }, options);
+    }
+
+    [Test]
     public async Task L2_NotificationOnLiveGetSessionIsAccepted()
     {
         await WithTransportAsync(async (prefix, client) =>
@@ -283,10 +304,12 @@ public sealed class LegacyCompatTests
 
     private const string Notification = """{"jsonrpc":"2.0","method":"notifications/initialized"}""";
 
-    private static async Task WithTransportAsync(Func<string, HttpClient, Task> test)
+    private static async Task WithTransportAsync(
+        Func<string, HttpClient, Task> test,
+        McpServerOptions? options = null)
     {
         var prefix = GetPrefix();
-        await using var transport = new HttpListenerMcpTransport(prefix, Options);
+        await using var transport = new HttpListenerMcpTransport(prefix, options ?? Options);
         await transport.StartAsync();
 
         try
